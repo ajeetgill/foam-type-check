@@ -295,6 +295,18 @@ After an edit, the one-file check can miss a problem you caused in **another**
 file, for example a renamed method that is still called elsewhere. The full
 check finds it.
 
+### Faster with the FOAM LSP (experiment)
+
+The hook spends half its time loading FOAM. A [FOAM LSP](https://github.com/foam-foundation/FOAM-LSP)
+already has FOAM loaded. An experimental LSP branch (`experiment/ftypechecks-types`,
+not published yet) watches the source folders. After an edit it writes the
+types file in about half a second, and the hook uses that file.
+
+- Measured on the same big app: hook 2.2 to 2.8 seconds (4.3 to 4.8 without the LSP). Same problems reported.
+- Nothing to set up in the plugin. The LSP finds `foam-check.config.json` at the workspace root.
+- No LSP running: the hook loads FOAM itself, as before.
+- `"lspWait"` in the config: how long the hook waits for the LSP, in milliseconds (default 4000).
+
 ## Undeclared fields
 
 Code sometimes sets a field that the class never declares:

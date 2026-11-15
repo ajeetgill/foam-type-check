@@ -21,6 +21,7 @@
 // The starting list is foam-check.baseline.json, next to the config file. Commit it.
 // Generated files go to .foam-check/ next to the config file. Add that folder to .gitignore.
 const fs = require('fs'), path = require('path'), { spawnSync } = require('child_process');
+const T0 = Date.now();
 
 const CONFIG = 'foam-check.config.json', BASELINE = 'foam-check.baseline.json';
 const flags = new Set(process.argv.slice(2).filter(a => a.startsWith('--')));
@@ -128,13 +129,43 @@ const relApp = f => f ? path.relative(app, path.resolve(app, f)).split(path.sep)
 
 // ---------- 1. types from the live models, plus the style report ----------
 const reportFile = path.join(work, 'report.json');
-try { fs.unlinkSync(reportFile); } catch (e) {}
-const gen = spawnSync(process.execPath, [path.join(__dirname, 'gen-types.js')], {
-  cwd: work, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
-  env: { ...process.env, FOAM_APP: app, FOAM_DTS_OUT: path.join(work, 'app.d.ts'), FOAM_STYLE: cfg.package, FOAM_REPORT: reportFile, FOAM_LEVEL: level }
-});
-if ( gen.status !== 0 || ! fs.existsSync(reportFile) )
-  stop('The models did not load. Last lines:\n' + ((gen.stdout || '') + (gen.stderr || '')).trim().split('\n').slice(-25).join('\n'));
+const generator = path.join(__dirname, 'gen-types.js');
+// For a FOAM LSP that has the app loaded: which generator, package and level to use.
+const genInfo = JSON.stringify({ generator, app, style: cfg.package, level }, null, 1);
+const genInfoFile = path.join(work, 'generator.json');
+if ( (() => { try { return fs.readFileSync(genInfoFile, 'utf8'); } catch (e) { return ''; } })() !== genInfo ) fs.writeFileSync(genInfoFile, genInfo);
+
+// EXPERIMENT. A FOAM LSP that already has the app loaded writes app.d.ts after each
+// edit (lsp.json says which file versions it saw). In hook mode use it, waiting a
+// little for it if it is running; otherwise load FOAM here (4-5 s on a big app).
+const fromLsp = (() => {
+  if ( ! hook || process.env.FTYPECHECKS_NO_LSP ) return false;
+  const lspFile = path.join(work, 'lsp.json');
+  let mtime; try { mtime = fs.statSync(edited).mtimeMs; } catch (e) { return false; }
+  const ready = () => {
+    let l; try { l = JSON.parse(fs.readFileSync(lspFile, 'utf8')); } catch (e) { return false; }
+    if ( l.generator !== generator || l.level !== level ) return false;
+    try { process.kill(l.pid, 0); } catch (e) { return false; }      // that LSP is gone
+    return l.seen && l.seen[edited] === mtime ? true : null;          // null: not yet
+  };
+  const wait = cfg.lspWait != null ? cfg.lspWait : 4000;
+  for ( const until = Date.now() + wait; ; ) {
+    const r = ready();
+    if ( r !== null ) return r;
+    if ( Date.now() >= until ) return false;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+})();
+if ( ! fromLsp ) {
+  try { fs.unlinkSync(reportFile); } catch (e) {}
+  const gen = spawnSync(process.execPath, [generator], {
+    cwd: work, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, FOAM_APP: app, FOAM_DTS_OUT: path.join(work, 'app.d.ts'), FOAM_STYLE: cfg.package, FOAM_REPORT: reportFile, FOAM_LEVEL: level }
+  });
+  if ( gen.status !== 0 || ! fs.existsSync(reportFile) )
+    stop('The models did not load. Last lines:\n' + ((gen.stdout || '') + (gen.stderr || '')).trim().split('\n').slice(-25).join('\n'));
+}
+if ( process.env.FTYPECHECKS_TIMES ) console.error(`types ${fromLsp ? 'from the LSP' : 'from a FOAM load'}: ${Date.now() - T0} ms`);
 const report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
 
 // Every problem: { file, line, kind, title, detail, fix, group, key }.
@@ -153,7 +184,7 @@ for ( const s of report.style ) problems.push({
 const rel = p => path.relative(work, p).split(path.sep).join('/');
 const tsconfig = oneFile ? 'tsconfig.hook.json' : 'tsconfig.json';
 fs.writeFileSync(path.join(work, tsconfig), JSON.stringify({
-  compilerOptions: { allowJs: true, checkJs: true, noEmit: true, strict: false, target: 'es2022', lib: ['es2022', 'dom'], types: [] },
+  compilerOptions: { allowJs: true, checkJs: true, noEmit: true, strict: false, target: 'es2022', lib: ['es2022', 'dom'], types: [], skipLibCheck: true },
   ...(oneFile ? { files: ['app.d.ts', rel(edited)] } : { include: ['app.d.ts', ...dirs.map(d => rel(d) + '/**/*.js')] })
 }, null, 2) + '\n');
 
@@ -167,6 +198,7 @@ if ( ! tscPath ) stop(`TypeScript not found. Run "npm install --save-dev typescr
 
 const tsc = spawnSync(tscPath, ['-p', tsconfig, '--pretty', 'false'], { cwd: work, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 if ( tsc.error ) stop(`Could not run ${tscPath}: ${tsc.error.message}`);
+if ( process.env.FTYPECHECKS_TIMES ) console.error(`TypeScript done: ${Date.now() - T0} ms`);
 const texts = new Map();
 const sourceText = f => { if ( ! texts.has(f) ) { let t = ''; try { t = fs.readFileSync(f, 'utf8'); } catch (e) {} texts.set(f, t); } return texts.get(f); };
 let last = null;
