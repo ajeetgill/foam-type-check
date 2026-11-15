@@ -288,8 +288,8 @@ Measured on one big app (1,144 source files):
 
 - Full check: about 35 seconds.
 - Hook after an edit, one file: 7 to 11 seconds.
-- First report at level `strict`: 2,680 problems. 2,524 of them are the four style rules, 121 are type errors.
-- At level `foam`: 20 type errors.
+- First report at level `strict`: 2,668 problems. 2,524 of them are the four style rules, 109 are type errors, 35 are undeclared fields.
+- At level `foam`: 8 type errors, 24 undeclared fields.
 
 After an edit, the one-file check can miss a problem you caused in **another**
 file, for example a renamed method that is still called elsewhere. The full

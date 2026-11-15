@@ -164,6 +164,8 @@ function generate_(opts, log) {
   function propType(p) {
     const k = p.cls_.id;
     let of; try { of = p.of && (typeof p.of === 'string' ? p.of : p.of.id); } catch (e) {}
+    // A DAOProperty with no `of` gets FOAM's default, foam.dao.DAO: it says nothing.
+    if ( k === 'foam.dao.DAOProperty' && of === 'foam.dao.DAO' ) of = null;
     if ( of && knownSet.has(of) ) {
       if ( k === 'foam.lang.FObjectProperty' || k === 'foam.lang.Enum' ) return { t: tsId(of), loose: true };
       if ( k === 'foam.lang.FObjectArray' ) return { t: tsId(of) + '[]', loose: true };
@@ -232,6 +234,7 @@ function generate_(opts, log) {
     return `(${params.join(', ')}): ${ret}`;
   }
 
+  const U2 = knownSet.has('foam.u2.Element') ? foam.lookup('foam.u2.Element') : null;
   const PROPS   = new Map();   // class id -> member types for properties with typed hooks
   const METHODS = new Map();   // class id -> member types for methods that declare types
   const MEMBERS = new Map();   // class id -> Map(member name -> type), own and inherited
@@ -267,6 +270,9 @@ function generate_(opts, log) {
         const body = sg.replace(/\): this$/, `): ${tsId(cls.id)}`);   // `this` type is not allowed in a type literal
         if ( /\?: (?!any)|\): (?!any$)/.test(sg) ) typed.push(`{ name: ${q(m.name)}; code?(this: ${tsId(cls.id)}, ${body.slice(1).replace(/^\)/, '...none: never[])')}; [key: string]: any } & ThisType<any>`);
       }
+      // start(SomeView, {...}) returns the new SomeView (start('div') a plain Element).
+      if ( m.name === 'start' && U2 && typeof m.code === 'function' && ( cls === U2 || U2.isSubClass(cls) ) )
+        out.push(`${ind}  "start"<C extends foam.$Base>(spec: foam.$Class<C, any>, ...rest: any[]): C;`);
       out.push(typeOf(m.name, sg) === sg ? `${ind}  ${q(m.name)}${sg};` : `${ind}  ${q(m.name)}: any;`);
     }
     // Methods that declare types: their bodies are checked against the declaration.
@@ -431,6 +437,8 @@ function generate_(opts, log) {
     '}',
     '',
     'declare namespace foam.lang { interface FObject { $UID: number; } }',
+    // Every real DAO has `of` (the class it holds); the DAO interface does not say so.
+    ...(HAS_DAO && ! (MEMBERS.get('foam.dao.DAO') || new Map()).has('of') ? ['declare namespace foam.dao { interface DAO { of: any; } }'] : []),
     '',
     'declare namespace foam {',
     ...(HAS_DAO ? [
