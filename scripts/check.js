@@ -14,7 +14,7 @@
 //   app      the app folder (holds foam3/ and pom.js), relative to the config file. Default "."
 //   package  the package prefix the style rules apply to
 //   sources  the folders to type-check, relative to the app folder
-//   tsc      optional: path to the TypeScript "tsc" program, relative to the config file
+//   tsc      optional: path to the TypeScript "tsc" program, relative to the config file; false = no type check
 //   level    optional: "strict" (default) reports every type error in model files, also plain
 //            JavaScript ones (isNaN(date), a variable reused with another type, a browser object
 //            with no cast), each with a Fix line. "foam" reports only wrong FOAM names and types:
@@ -256,7 +256,8 @@ const SOURCES = [
     file: relApp(j.file), line: j.line, detail: j.detail, key: `journal|${relApp(j.file)}|${j.rule}|${j.key}`
   })),
   // The type check (TypeScript), when there is a .js file to check.
-  () => targetJs && ! targetJs.length ? [] : typeProblems()
+  // ("tsc": false in the config turns it off.)
+  () => cfg.tsc === false || ( targetJs && ! targetJs.length ) ? [] : typeProblems()
 ];
 
 // TypeScript output -> problems.
@@ -281,7 +282,17 @@ function typeProblems() {
     cfg.tsc && path.resolve(cfg.base, cfg.tsc), bin(cfg.base), bin(cfg.app),
     process.env.CLAUDE_PLUGIN_DATA && bin(process.env.CLAUDE_PLUGIN_DATA), bin(path.dirname(__dirname))
   ].filter(Boolean).find(p => fs.existsSync(p));
-  if ( ! tscPath ) stop(`TypeScript not found. Run "npm install --save-dev typescript" in ${cfg.base}, or set "tsc" in ${cfg.file}.`);
+  if ( ! tscPath ) {
+    // Never install on our own: ask the person first (installing runs code from npm).
+    const data = process.env.CLAUDE_PLUGIN_DATA;
+    const cmd = data ? `npm install --prefix "${data}" typescript` : `npm install --save-dev typescript   (in ${cfg.base})`;
+    stop(asHook
+      ? `TypeScript is not installed, so the type check cannot run.\n` +
+        `Ask the user: "FTypechecks needs TypeScript (about 30 MB, from npm). May I install it?"\n` +
+        `If they say yes, run: ${cmd}\n` +
+        `If they say no, set "tsc": false in ${cfg.file}. The other checks keep running.`
+      : `TypeScript not found. Install it with: ${cmd}\nOr set "tsc" in ${cfg.file} to a tsc path, or to false to skip the type check.`);
+  }
   const tsc = spawnSync(tscPath, ['-p', tsconfig, '--pretty', 'false'], { cwd: cfg.work, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if ( tsc.error ) stop(`Could not run ${tscPath}: ${tsc.error.message}`);
   time('TypeScript done');

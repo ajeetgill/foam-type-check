@@ -28,7 +28,7 @@ This check finds those mistakes in a few seconds, with no build and no server.
 
 - Node.
 - A FOAM app with foam3 at `<app>/foam3` and a `pom.js` at `<app>/pom.js`.
-- TypeScript in the app: `npm install --save-dev typescript`.
+- TypeScript. If it is missing, the hook tells Claude to ask you before it installs it.
 - No Java, no build, no running server.
 
 ## Install
@@ -65,6 +65,7 @@ the FOAM tutorial app. Its layout:
      classes are `com.foamdev.cook.<Name>`.
    - `sources`: the folders to check, relative to the app folder.
    - `tsc` (optional): path to the TypeScript `tsc` program, if it is not in the app's `node_modules`.
+     `false` skips the type check; the other checks still run.
    - `level` (optional): `"strict"` (default) or `"foam"`. See "Two levels" below.
    - `hook` (optional): what the hook checks after an edit. `"file"`: only the
      edited file. `"all"`: every source folder. Default: `"all"` up to 100
