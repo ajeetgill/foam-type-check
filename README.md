@@ -326,7 +326,8 @@ already has FOAM loaded. An experimental LSP branch (`experiment/ftypechecks-typ
 not published yet) watches the source folders. After an edit it writes the
 types file in about half a second, and the hook uses that file.
 
-- Measured on the same big app: hook 2.2 to 2.8 seconds (4.3 to 4.8 without the LSP). Same problems reported.
+- Measured on the same big app: hook 2.1 to 2.2 seconds (4.2 to 4.6 without the LSP). Same problems reported.
+- The LSP builds the types and the report itself (its own copy of the generator, its own style and journal checks), so the editor and the hook show the same problems.
 - Nothing to set up in the plugin. The LSP finds `foam-check.config.json` at the workspace root.
 - No LSP running: the hook loads FOAM itself, as before.
 - `"lspWait"` in the config: how long the hook waits for the LSP, in milliseconds (default 4000).
@@ -384,6 +385,7 @@ restart to find, and some fail with no error:
 | A row over several lines whose first line is not exactly `p({` | reads each line as a row: the row loads half-filled |
 | A line that is not a row and not a comment | fails on it |
 | A row that does not parse | skips it |
+| Text after the row's closing `}` (a key after it, or two rows on one line) | drops it, no error |
 | An unknown class | skips the row |
 | An unknown key | drops the value, no error |
 | Two or more rows of a class with no id | gives them all the same empty id: only the last survives |

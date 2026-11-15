@@ -6,6 +6,7 @@
  *     reader reads each line as its own row, so the row loads half-filled or not at all
  *   - a line that is not a row and not a comment: FOAM reads it as a row and fails
  *   - a row that does not parse: FOAM skips it
+ *   - text after the row's closing }: FOAM drops it with no error
  *   - a class that does not exist: FOAM skips the row (a row with no class gets the
  *     class the file's other rows name, if they all name one)
  *   - a key that is not a property of the class: FOAM drops the value, with no error
@@ -22,13 +23,31 @@ const OPEN = new Set(['p({', 'r({', 'c({']);
 const isRowStart = t => /^[prcv]\(/.test(t);
 
 // FOAM journal JSON: JavaScript object syntax plus """multi-line strings""".
+// FOAM's parser (JSONParser.parseString) reads the first object after `p(` and
+// ignores what follows. Returns { row, rest }: rest is the text after the object
+// other than the closing `)` (and a `;` or // comment after it).
 // Plain JSON first (fast); else JavaScript, in one sandbox shared by every row.
 let SANDBOX = null;
-function parseRow(body) {
-  body = body.replace(/"""([\s\S]*?)"""/g, (m, t) => JSON.stringify(t));
-  try { return JSON.parse(body); } catch (e) { /* not plain JSON: try JavaScript object syntax */ }
+function objectEnd(t) {
+  let depth = 0, quote = null;
+  for ( let i = 0; i < t.length; i++ ) {
+    const c = t[i];
+    if ( quote ) { if ( c === '\\' ) i++; else if ( c === quote ) quote = null; }
+    else if ( c === '"' || c === "'" || c === '`' ) quote = c;     // FOAM's StringParser takes all three
+    else if ( c === '{' || c === '[' ) depth++;
+    else if ( c === '}' || c === ']' ) { if ( --depth === 0 ) return c === '}' ? i : -1; }
+    else if ( depth === 0 && ! /\s/.test(c) ) return -1;
+  }
+  return -1;
+}
+function parseRow(text) {
+  const body = text.slice(2).replace(/"""([\s\S]*?)"""/g, (m, t) => JSON.stringify(t));
+  const end = objectEnd(body);
+  if ( end === -1 ) return { row: undefined, rest: '' };
+  const obj = body.slice(0, end + 1), rest = body.slice(end + 1).replace(/\s*\/\/[^"'`]*$/, '').replace(/\)\s*;?\s*$/, '').trim();
+  try { return { row: JSON.parse(obj), rest }; } catch (e) { /* not plain JSON: try JavaScript object syntax */ }
   SANDBOX = SANDBOX || vm.createContext(Object.create(null));
-  try { return vm.runInContext('(' + body + ')', SANDBOX, { timeout: 500 }); } catch (e) { return undefined; }
+  try { return { row: vm.runInContext('(' + obj + ')', SANDBOX, { timeout: 500 }), rest }; } catch (e) { return { row: undefined, rest }; }
 }
 
 // Class ids declared in source files, also those FOAM does not load in Node
@@ -82,7 +101,8 @@ function checkJournals({ foam, app, files }) {
       if ( t[0] === '/' ) { inBlock = t.startsWith('/*') && ! t.includes('*/'); continue; }
       if ( ! isRowStart(t) ) { add(file, lineNo, 'line read as a row', t.trim().slice(0, 60)); continue; }
 
-      const row = parseRow(t.slice(2, t.length - 1));
+      const { row, rest } = parseRow(t);
+      if ( row && typeof row === 'object' && rest ) add(file, lineNo, 'text after the row', rest.slice(0, 60));
       if ( ! row || typeof row !== 'object' ) {
         const next = lines.slice(i + 1).find(l => l.trim());
         if ( ! t.includes('\n') && next !== undefined && ! isRowStart(next) && next[0] !== '/' ) {

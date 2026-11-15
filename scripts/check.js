@@ -58,7 +58,7 @@ const paint = (code, s) => color ? `\x1b[${code}m${s}\x1b[0m` : s;
 const bold = s => paint(1, s), red = s => paint(31, s), dim = s => paint(2, s), green = s => paint(32, s);
 const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + 's')}`;
 const ONE = Object.fromEntries(Object.values(RULES).map(r => [r.group, r.one]));   // group name -> name of one
-const named = (n, group) => `${n} ${n === 1 ? ONE[group] : group}`;
+const named = (n, group) => `${n} ${n === 1 ? ONE[group] || group : group}`;
 
 // ---------- small file helpers ----------
 const readText = f => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return ''; } };
@@ -235,8 +235,8 @@ const scope = targets && [...targets, ...users];
 // gives its group and, unless the problem says otherwise, its title and fix.
 // "key" has no line number, so the starting list survives edits above a problem.
 const problem = (rule, p) => {
-  const r = RULES[rule];
-  if ( ! r ) throw new Error(`FTypechecks: no rule "${rule}" in rules.js`);
+  // A rule this version does not know (a newer FOAM LSP wrote the report): shown one by one, as reported.
+  const r = RULES[rule] || { kind: 'line', title: rule, group: 'other problems' };
   return { rule, line: 0, title: r.title, fix: r.fix, ...p, kind: r.kind, group: r.group };
 };
 

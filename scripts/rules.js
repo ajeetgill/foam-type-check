@@ -52,6 +52,7 @@ const JOURNAL = [
   { id: 'row split over lines', title: 'Row split over lines', fix: 'FOAM reads a row over several lines only when its first line is exactly p({ and its last line is exactly }). Put p({ and }) on lines of their own, or write the row on one line. As it is, each line is read as a row: the row loads half-filled or not at all.' },
   { id: 'line read as a row',   title: 'Line read as a row',   fix: 'FOAM reads every line that is not a comment as a row, and fails on this one. Start a comment with // at the very start of the line.' },
   { id: 'row does not parse',   title: 'Row does not parse',   fix: 'FOAM cannot read this row and skips it. Check quotes, commas and brackets.' },
+  { id: 'text after the row',   title: 'Text after the row (FOAM silently drops it)', fix: "FOAM reads a row up to the } that closes its first {, and drops the rest with no error. Move the keys inside the braces; put a second row on a line of its own." },
   { id: 'unknown class',        title: 'Unknown class',        fix: 'No class has this id, so FOAM skips the row. Check the spelling and the package.' },
   { id: 'unknown key',          title: 'Unknown key (FOAM silently drops it)', fix: 'The class has no property with this name, so the value is lost with no error. Use a property name of the class, or remove the key.' },
   { id: 'rows with no id',      title: 'Rows with no id',      fix: 'A journal replay gives each of these rows the same empty id, so only the last one survives. Give every row its own "id".' }
