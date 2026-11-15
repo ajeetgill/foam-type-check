@@ -9,7 +9,7 @@
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/check.js", "--hook"],
             "timeout": 120,
-            "statusMessage": "FOAM type check"
+            "statusMessage": "FTypechecks"
           }
         ]
       }

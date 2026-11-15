@@ -1,17 +1,28 @@
-# FOAM Type Check (Claude Code plugin)
+# FTypechecks: FOAM Type-Checking
 
-Type-checks FOAM3 model code with the TypeScript checker. It rewrites no source
-and needs no change to foam3.
+A Claude Code plugin. It type-checks FOAM3 model code with the TypeScript checker.
+
+- It rewrites no source.
+- It needs no change to foam3.
+- It works on new code and on existing code.
 
 Status: an experiment. Tested on one small app.
 
+## Why
+
+FOAM accepts many mistakes without a word. A wrong property name, a wrong key
+in `create({...})`, an import with no `key`: the app loads, and the mistake
+shows up later in the browser, or never.
+
+This check finds those mistakes in a few seconds, with no build and no server.
+
 ## What is in the plugin
 
-- A hook: after each Edit or Write to a model file, the check runs. Problems go
-  back to Claude as an error, so Claude fixes them in the same turn.
-- A skill: the four style rules, how to set up an app, how to read the errors.
-- Two scripts: `scripts/check.js` (the one command) and `scripts/gen-types.js`
-  (writes the types from the live FOAM models).
+- **A hook.** After each Edit or Write to a model file, the check runs. Problems
+  go back to Claude as an error, so Claude fixes them in the same turn.
+- **A skill.** The four style rules, how to convert existing code, how to read the errors.
+- **Two scripts.** `scripts/check.js` is the one command. `scripts/gen-types.js`
+  writes the types from the live FOAM models.
 
 ## What you need
 
@@ -33,60 +44,261 @@ Or try it without installing, from a clone of this repository:
 
 ## Set up an app
 
-1. Create `foam-check.config.json` in the app folder:
+The example is [FOAM-Recipes](https://github.com/foam-foundation/FOAM-Recipes),
+the FOAM tutorial app. Its layout:
+
+    FOAM-Recipes/
+      foam3/                      FOAM itself
+      pom.js                      the app's POM
+      src/com/foamdev/cook/       the model files (Recipe.js, RecipeStep.js, ...)
+
+1. Create `foam-check.config.json` in the app folder, here `FOAM-Recipes/`:
 
        {
          "app": ".",
-         "package": "com.example.myapp",
-         "sources": ["src/com/example/myapp"]
+         "package": "com.foamdev.cook",
+         "sources": ["src/com/foamdev/cook"]
        }
 
-   - `app`: the app folder, relative to this file.
-   - `package`: the package prefix the style rules apply to.
+   - `app`: the app folder, relative to this file. It holds `foam3/` and `pom.js`.
+   - `package`: the package prefix the style rules apply to. All FOAM-Recipes
+     classes are `com.foamdev.cook.<Name>`.
    - `sources`: the folders to check, relative to the app folder.
-   - `tsc` (optional): path to the TypeScript `tsc` program.
-2. Add `.foam-check/` to `.gitignore`. Generated files go there.
+   - `tsc` (optional): path to the TypeScript `tsc` program, if it is not in the app's `node_modules`.
+2. Install TypeScript in the app folder: `npm install --save-dev typescript`.
+3. Add `.foam-check/` to `.gitignore`. Generated files go there.
+4. Run the check from the app folder:
+
+       node /path/to/foam-type-check/scripts/check.js
+
+       FTypechecks: 0 problems (com.foamdev.cook)
+
+For your own app, change `package` and `sources`.
 
 With no `foam-check.config.json`, the plugin does nothing.
 
-## Run by hand
+## Commands
 
-    node scripts/check.js <app folder>
+Run from the app folder, or give the app folder as the first argument.
 
-Exit code 0: no problems. Exit code 1: problems, printed.
+| Command | What it does |
+| :- | :- |
+| `node scripts/check.js` | Check. Exit code 0: no problems. Exit code 1: problems, printed. |
+| `node scripts/check.js --report` | Conversion report: what is left to convert, per file. |
+| `node scripts/check.js --baseline` | Write the starting list: accept today's problems. |
+| `node scripts/check.js --all` | Check and ignore the starting list. |
 
-## The four style rules
+## The four style rules, with examples
 
-1. Every property has a `class`.
-2. A method that takes arguments uses the object form with typed `args`.
-3. An import says its type and has a `key`.
-4. A DAO import says what it holds (`of`).
+The check can only find what FOAM knows. These four rules tell FOAM the types.
 
-Examples are in `skills/foam-type-check/SKILL.md`.
+### 1. Every property has a `class`
 
-Expect many errors on old code that does not follow the rules. Convert bit by bit.
+Bad. FOAM does not know what `title` holds:
+
+    properties: [
+      'title',
+      { name: 'servings' }
+    ]
+
+Good:
+
+    properties: [
+      { class: 'String', name: 'title' },
+      { class: 'Int',    name: 'servings' }
+    ]
+
+What you gain: `recipe.servings = 'four'` is now reported.
+
+### 2. A method that takes arguments uses the object form with `args`
+
+Bad. FOAM ignores type comments in an argument list, so `index` has no type:
+
+    methods: [
+      async function removeStep(/* Int */ index) {
+        ...
+      }
+    ]
+
+Good:
+
+    methods: [
+      {
+        name: 'removeStep',
+        args: 'Int index',
+        async: true,
+        code: async function(index) {
+          ...
+        }
+      }
+    ]
+
+What you gain: `this.removeStep('two')` is now reported.
+
+Not reported: `this.removeStep()` with the argument left out. Every argument is treated as optional.
+
+A method with no arguments can stay short: `function render() { ... }`.
+
+### 3. An import says its type and has a `key`
+
+Bad. `notify` could be anything:
+
+    imports: [
+      'notify',
+      'recipeDAO'
+    ]
+
+Also bad. This loads, but FOAM reports "No key for import" and the import is broken:
+
+    imports: [
+      { name: 'notify', type: 'Function' }
+    ]
+
+Good:
+
+    imports: [
+      { name: 'notify', key: 'notify', type: 'Function' }
+    ]
+
+What you gain: `this.notfy(...)` was always an error. Now `this.notify.foo` is too.
+
+### 4. A DAO import says what it holds
+
+Bad. The check knows it is a DAO, but not a DAO of what:
+
+    { name: 'recipeDAO', key: 'recipeDAO', type: 'foam.dao.DAO' }
+
+Good:
+
+    { name: 'recipeDAO', key: 'recipeDAO', type: 'foam.dao.DAO', of: 'com.foamdev.cook.Recipe' }
+
+What you gain: after `var r = await this.recipeDAO.find(id)`, `r.titel` is reported.
+
+## Mistakes it finds, with no rule needed
+
+These are found in any code, because FOAM already knows the classes:
+
+    this.Recipe.create({ nmae: 'Soup' })   // unknown key. FOAM would silently drop it.
+    recipe.titel                           // unknown name
+    this.removeStepp(2)                    // unknown name. Did you mean 'removeStep'?
+    this.start().addClas('x')              // unknown name in a builder chain
+
+## What the output looks like
+
+A check with problems:
+
+    FTypechecks: 2 problems in 1 file
+
+    src/com/foamdev/cook/RecipeView.js
+      line 158: Unknown name (TS2551)
+          Property 'removeStepp' does not exist on type 'RecipeView'. Did you mean 'removeStep'?
+      1 method with untyped arguments: brandNew
+          Fix: Use the object form: { name, args: 'Type name', code: function(name) {...} }.
+
+A clean check:
+
+    FTypechecks: 0 problems (com.foamdev.cook)
+
+In a terminal, file names are bold and problems are red. Set `NO_COLOR=1` to turn that off.
+
+## Existing code: convert bit by bit
+
+Old code does not follow the four rules. Without help, every check would fail
+with all the old problems. The starting list solves that.
+
+### Step 1. See how much there is
+
+    node scripts/check.js --report
+
+    FTypechecks conversion report: com.foamdev.cook
+
+         21  files checked
+         12  files with 0 problems
+          9  files to convert
+         32  problems in total
+
+    By kind
+         17  methods with untyped arguments
+         15  imports with no type
+
+    By file  (most problems first)
+
+    src/com/foamdev/cook/RecipeCreateView.js  — 11 problems
+          6  imports with no type
+          5  methods with untyped arguments
+
+### Step 2. Accept today's problems
+
+    node scripts/check.js --baseline
+
+This writes `foam-check.baseline.json` next to the config file. Commit it.
+
+From now on the check, and the hook, fail only on **new** problems:
+
+    FTypechecks: 0 new problems (com.foamdev.cook)
+    32 older problems on the starting list are not shown. See them with --all.
+
+### Step 3. Convert, one file at a time
+
+Pick a file from the report. Convert it. Run the check. Then:
+
+    FTypechecks: 0 new problems (com.foamdev.cook)
+    26 older problems on the starting list are not shown. See them with --all.
+    6 problems from the starting list are fixed. Run --baseline to shrink the list.
+
+Run `--baseline` again. The list only gets shorter. A problem that comes back is reported as new.
+
+### Step 4. Finish
+
+When `--report` shows 0 problems, delete `foam-check.baseline.json`.
+
+### Two ways to work
+
+- **Bit by bit.** Keep the starting list. Convert a file when you touch it.
+- **All at once.** Convert a whole package, then delete the starting list.
+
+### An order that worked
+
+1. Imports (rule 3). Small and mechanical.
+2. Methods (rule 2). You must look up each argument type.
+3. DAO imports (rule 4).
+4. Properties (rule 1).
+
+### Traps we hit
+
+- **An object-form import with no `key`.** It loads and is broken. The check reports it.
+- **Find-and-replace run twice.** It turned an import into
+  `{ name: { name: ... } }`. FOAM accepted it. The check caught it. Convert by hand or check after each file.
+- **A wrong type guess.** We wrote a class where the value was a name string. The check caught it at the call.
+- **The check is not a test.** After converting, run the app and click through the changed screens.
 
 ## Not checked
 
-Null and undefined values, the context, relationship properties, `dynamic(...)`
+Null and undefined values, a missing argument, the context, relationship properties, `dynamic(...)`
 arguments, listener and action arguments, classes with `refines:` or no package,
 Java, CSS, journals.
 
+0 problems means no wrong names and no wrong types in the checked parts. It does
+not mean the app works.
+
 ## How it works
 
-1. `scripts/gen-types.js` loads FOAM and your app in Node and asks the live
-   models for every class, property and method. It writes one `.d.ts` file.
-2. `scripts/check.js` runs that, reports failed FOAM assertions and broken style
+1. `scripts/gen-types.js` loads FOAM and your app in one Node process and asks
+   the live models for every class, property and method. It writes one `.d.ts` file.
+2. `scripts/check.js` runs that, collects failed FOAM assertions and broken style
    rules, then runs the TypeScript checker on your sources. Check only.
 3. The hook runs `check.js` after each edit and sends problems back to Claude.
 
-It takes about 5 seconds on a small app. A new method or property is known to
-the check only after the types are regenerated, so every run regenerates them.
+It takes about 5 seconds on a small app. Every run regenerates the types, so a
+new method or property is known at once.
 
 ## Tested
 
-- One small tutorial app: 0 problems when clean.
+- One small tutorial app: 0 problems when converted.
+- An unconverted copy of that app: 32 problems reported; with a starting list, 0 new.
+- New mistakes on top of a starting list: reported. Old ones: not reported.
 - 21 planted mistakes across the test rounds: 21 caught.
+- Every example in this README was planted and run: 9 are reported, and the 1 marked "not reported" is not.
 - A project with no config file: the hook does nothing.
 
 Not tested: other apps, other foam3 versions, an app with several `pom.js` files.

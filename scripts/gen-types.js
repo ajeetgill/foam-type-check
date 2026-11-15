@@ -429,15 +429,17 @@ const lines = [
 ];
 fs.writeFileSync(OUT, lines.join('\n'));
 console.log(`wrote ${path.basename(OUT)}: ${known.length} classes, ${lines.length} lines`);
-// A model can load and still be broken (an import with no key). FOAM says so
-// with a failed assertion. Show the ones for the package being checked.
+// FOAM_STYLE=<package prefix>: report on the classes of that package.
+//   - failed FOAM assertions: a model can load and still be broken (an import with no key)
+//   - the style rules the type check relies on
+// FOAM_REPORT=<file> also writes the findings as JSON, for check.js.
 if ( process.env.FOAM_STYLE ) {
-  const mine = [...new Set(LOAD_ASSERTS.filter(a => a.startsWith(process.env.FOAM_STYLE) || a.split(': ')[0].includes(process.env.FOAM_STYLE.replace(/\./g, '/'))))];
-  if ( mine.length ) console.log(`FOAM assertions failed (${mine.length}):\n  ` + mine.join('\n  '));
-}
+  const PKG = process.env.FOAM_STYLE;
+  const sourceOf = id => { try { const c = foam.lookup(id, true); return (c && c.model_ && c.model_.source) || ''; } catch (e) { return ''; } };
 
-// FOAM_STYLE=<package prefix>: list what the stricter style rules would flag.
-if ( process.env.FOAM_STYLE ) {
+  const asserts = [...new Set(LOAD_ASSERTS.filter(a => a.startsWith(PKG) || a.split(': ')[0].includes(PKG.replace(/\./g, '/'))))]
+    .map(a => { const i = a.indexOf(': '), where = a.slice(0, i); return { where, message: a.slice(i + 2).trim(), file: where.includes('/') ? where : sourceOf(where) }; });
+
   const found = [], files = new Map();
   const ownSource = cls => {
     const f = cls.model_ && cls.model_.source;
@@ -445,21 +447,24 @@ if ( process.env.FOAM_STYLE ) {
     if ( ! files.has(f) ) { let t = ''; try { t = fs.readFileSync(f, 'utf8'); } catch (e) {} files.set(f, t); }
     return files.get(f);
   };
-  for ( const id of known.filter(i => i.startsWith(process.env.FOAM_STYLE)) ) {
-    const cls = foam.lookup(id);
+  for ( const id of known.filter(i => i.startsWith(PKG)) ) {
+    const cls = foam.lookup(id), file = (cls.model_ && cls.model_.source) || '';
+    const add = (kind, member, rule) => found.push({ cls: id, kind, member, rule, file });
     for ( const p of cls.getOwnAxiomsByClass(foam.lang.Property) )
-      if ( p.cls_.id === 'foam.lang.Property' ) found.push(`${id}.${p.name}: property has no class`);
+      if ( p.cls_.id === 'foam.lang.Property' ) add('property', p.name, 'property has no class');
     for ( const m of cls.getOwnAxiomsByClass(foam.lang.Method) )
       // Only methods written in the class's own file (not ones FOAM generates).
       if ( typeof m.code === 'function' && m.code.length && ownSource(cls).includes(Function.prototype.toString.call(m.code)) &&
            ! ( Array.isArray(m.args) && m.args.length >= m.code.length && m.args.every(x => x && x.type) ) )
-        found.push(`${id}.${m.name}(): argument has no type`);
+        add('method', m.name, 'argument has no type');
     if ( foam.lang.Import ) for ( const im of cls.getOwnAxiomsByClass(foam.lang.Import) )
-      if ( typeof im.type !== 'string' && typeof im.of !== 'string' ) found.push(`${id}.${im.name}: import has no type`);
-      else if ( im.type === 'foam.dao.DAO' && typeof im.of !== 'string' ) found.push(`${id}.${im.name}: DAO import does not say what it holds (add of:)`);
+      if ( typeof im.type !== 'string' && typeof im.of !== 'string' ) add('import', im.name, 'import has no type');
+      else if ( im.type === 'foam.dao.DAO' && typeof im.of !== 'string' ) add('import', im.name, 'DAO import does not say what it holds');
   }
-  console.log(found.join('\n'));
-  console.log(`style: ${found.length} findings in ${process.env.FOAM_STYLE}`);
+  if ( process.env.FOAM_REPORT ) fs.writeFileSync(process.env.FOAM_REPORT, JSON.stringify({ package: PKG, asserts, style: found }, null, 2));
+  for ( const a of asserts ) console.log(`${a.where}: FOAM assertion failed: ${a.message}`);
+  for ( const f of found ) console.log(`${f.cls}.${f.member}: ${f.rule}`);
+  console.log(`style: ${found.length} findings, ${asserts.length} failed assertions in ${PKG}`);
 }
 
 // Browser-only classes start async work that fails in Node. The file is written, so stop here.

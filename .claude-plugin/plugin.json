@@ -1,7 +1,7 @@
 {
   "name": "foam-type-check",
-  "displayName": "FOAM Type Check",
-  "version": "0.1.0",
+  "displayName": "FTypechecks: FOAM Type-Checking",
+  "version": "0.2.0",
   "description": "Type-checks FOAM3 model code with the TypeScript checker after each edit. No source rewriting, no foam3 changes.",
   "author": {
     "name": "Ajeet Gill"

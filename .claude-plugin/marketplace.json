@@ -1,12 +1,14 @@
 {
   "name": "foam-tools",
   "description": "Tools for FOAM3 development in Claude Code.",
-  "owner": { "name": "Ajeet Gill" },
+  "owner": {
+    "name": "Ajeet Gill"
+  },
   "plugins": [
     {
       "name": "foam-type-check",
       "source": "./",
-      "description": "Type-checks FOAM3 model code with the TypeScript checker after each edit."
+      "description": "FTypechecks: type-checks FOAM3 model code with the TypeScript checker after each edit."
     }
   ]
 }
