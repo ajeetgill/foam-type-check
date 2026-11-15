@@ -24,7 +24,7 @@ Status: an experiment. Tested on one small app.
 
 In Claude Code:
 
-    /plugin marketplace add OWNER/foam-type-check
+    /plugin marketplace add ajeetgill/foam-type-check
     /plugin install foam-type-check@foam-tools
 
 Or try it without installing, from a clone of this repository:
