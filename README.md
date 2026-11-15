@@ -65,6 +65,7 @@ the FOAM tutorial app. Its layout:
      classes are `com.foamdev.cook.<Name>`.
    - `sources`: the folders to check, relative to the app folder.
    - `tsc` (optional): path to the TypeScript `tsc` program, if it is not in the app's `node_modules`.
+   - `level` (optional): `"strict"` (default) or `"foam"`. See "Two levels" below.
    - `hook` (optional): what the hook checks after an edit. `"file"`: only the
      edited file. `"all"`: every source folder. Default: `"all"` up to 100
      source files, `"file"` above that.
@@ -287,7 +288,8 @@ Measured on one big app (1,144 source files):
 
 - Full check: about 35 seconds.
 - Hook after an edit, one file: 7 to 11 seconds.
-- First report: 2,685 problems in 275 files. 2,524 of them are the four style rules.
+- First report at level `strict`: 2,680 problems. 2,524 of them are the four style rules, 121 are type errors.
+- At level `foam`: 20 type errors.
 
 After an edit, the one-file check can miss a problem you caused in **another**
 file, for example a renamed method that is still called elsewhere. The full
@@ -306,11 +308,37 @@ This is reported as its own line, once per field:
       2 undeclared fields: opening_ (on ReaderView), refuseWith (on ProxyDAO)
           Fix: ... Declare it in properties, for example { class: 'Boolean', name: 'x' }.
 
-## Not flagged on purpose
+## Two levels
+
+The aim: cleaner code, and mistakes caught by a type check, not by a build and
+a server start.
+
+**`"level": "strict"` (default).** Every type error in a model file is
+reported, also the ones that are valid JavaScript. Each of these has a `Fix:` line:
+
+    isNaN(date)                       Fix: isNaN(date.getTime())
+    el.value  (el from querySelector) Fix: /** @type {HTMLInputElement} */ (el)
+    rule.selectorText                 Fix: /** @type {CSSStyleRule} */ (rule)
+    list items with different keys    Fix: give every item the same keys
+    var x = 1; ... var x = 'a';       Fix: use a new variable name
+
+**`"level": "foam"`.** Only wrong FOAM names and wrong FOAM types: a wrong
+property or method name, a wrong `create({...})` key, a wrong argument, a
+broken import. These are the mistakes that otherwise need a build and a test
+run to find. Plain JavaScript findings are dropped, and browser objects accept
+any member. Use this to start on a big code base with less noise.
+
+## Mixins
+
+A class that another class takes in with `mixins: [...]` is checked as its
+host: inside the mixin, `this` is the host class. With several hosts, `this`
+is not checked.
+
+## Not flagged, at both levels
 
 - A file that only has `refines:`. Refinements are not checked.
 - `create({ name$: slot })`. FOAM binds the property to the slot.
-- Members of DOM elements, such as `.value` after `querySelector()`.
+- A plain script with no FOAM model in it, such as a Node runner.
 - Fields added to a plain JavaScript object (`var o = {}; o.x = 1`).
 
 ## Not checked
@@ -343,8 +371,8 @@ new method or property is known at once.
 - A project with no config file: the hook does nothing.
 
 - One big app (1,144 files), read-only: the numbers above. Three groups of
-  false alarms found there are fixed (refinement files, `name$` keys, DOM members).
-  128 type errors remain there. They are not sorted into real bugs and false alarms.
+  false alarms found there are fixed (refinement files, `name$` keys, mixins).
+  The remaining type errors are not sorted into real bugs and cleanups.
 
 Not tested: other foam3 versions, an app with several `pom.js` files, a full conversion of a big app.
 

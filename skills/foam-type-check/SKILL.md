@@ -125,6 +125,9 @@ Problems are grouped by file. Each has a plain-language title.
   property. FOAM would silently drop it.
 - `line N: Wrong number of arguments` / `Wrong type`: a wrong call to a typed method.
 - `The models did not load`: a syntax error or a load error. Read the last lines.
+- A type error with a `Fix:` line (for example `isNaN(date)`, `el.value` on a
+  plain Element, list items with different keys): valid JavaScript that the
+  project wants cleaner (level `strict`, the default). Apply the fix. Do not silence it.
 - `N undeclared fields: x (on Y)`: the code sets a field that class Y does not
   declare. Declare it in `properties`.
 - `N older problems on the starting list are not shown`: not an error. Old code

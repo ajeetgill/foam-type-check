@@ -12,6 +12,10 @@
 //   package  the package prefix the style rules apply to
 //   sources  the folders to type-check, relative to the app folder
 //   tsc      optional: path to the TypeScript "tsc" program, relative to the config file
+//   level    optional: "strict" (default) reports every type error in model files, also plain
+//            JavaScript ones (isNaN(date), a variable reused with another type, a browser object
+//            with no cast), each with a Fix line. "foam" reports only wrong FOAM names and types:
+//            the mistakes that otherwise need a build and a test run to find.
 //   hook     optional: what the hook checks after an edit. "file": only the edited file (fast).
 //            "all": every source folder. Default: "all" up to 100 source files, "file" above that.
 // The starting list is foam-check.baseline.json, next to the config file. Commit it.
@@ -44,6 +48,16 @@ const RULES = {
   'undeclared field':                     { group: 'undeclared fields',              one: 'undeclared field',               fix: "The code sets this on a FOAM object, but the class does not declare it. Declare it in properties, for example { class: 'Boolean', name: 'x' }." }
 };
 
+// TypeScript error kinds that say something about FOAM code. The rest is plain JavaScript
+// typing strictness (a variable reused with another type, arithmetic on a Date, ...).
+const KEEP = new Set(['TS2339', 'TS2551', 'TS2353', 'TS2561', 'TS2554', 'TS2555', 'TS2345', 'TS2322', 'TS2304', 'TS2552']);
+// A type that TypeScript made up from plain JavaScript: an object literal, a function, a union
+// of those, a namespace. Not a FOAM class, and not a simple type (string, number) that a FOAM
+// property or argument declares. '(...args: any[]) => any' is ours: an import of type Function.
+const madeUp = t => t !== '(...args: any[]) => any' &&
+  ( /^[{(\[]/.test(t) || / \| [{(]/.test(t) || /^typeof /.test(t) || /[})]\[\]$/.test(t) );
+const MODEL = /foam\s*\.\s*(CLASS|ENUM|INTERFACE|RELATIONSHIP|SCRIPT|LIB)\s*\(/;
+
 // ---------- find the app ----------
 const findConfig = from => {
   for ( let d = path.resolve(from); ; d = path.dirname(d) ) {
@@ -68,6 +82,19 @@ if ( ! cfgFile ) {
 }
 
 // A failure of the tool itself (not a problem in the code).
+// Plain-JavaScript cleanups that level "strict" reports: how to fix each kind.
+const CLEANUP = [
+  [/^TS2345$/, /of type 'Date' is not assignable to parameter of type 'number'/, 'Pass a number: date.getTime(). For example isNaN(date.getTime()).'],
+  [/^TS(2339|2551)$/, /on type '(Element|Node|EventTarget|Event|CSSRule|Document|Window|CSSStyleDeclaration)'/, "Say the real type with a JSDoc cast: /** @type {HTMLInputElement} */ (el), /** @type {CSSStyleRule} */ (rule), /** @type {KeyboardEvent} */ (e)."],
+  [/^TS(2741|2739|2740)$/, /./, 'Give the object every key the other one has. Items in one list should all have the same keys.'],
+  [/^TS2403$/, /./, 'Use a new variable name. One variable should keep one type.'],
+  [/^TS(2362|2363|2365)$/, /./, 'Do arithmetic on numbers. For a date use date.getTime().'],
+  [/^TS2322$/, /is not assignable to type '\(/, 'Use a new variable name. This variable held a function and now gets a value.'],
+  [/^TS2538$/, /./, 'Use a string or a number as the key.'],
+  [/^TS2810$/, /./, 'Write: /** @type {Promise<void>} */ (new Promise(...)), or call resolve with a value.']
+];
+const cleanupFix = (code, msg) => { const c = CLEANUP.find(c => c[0].test(code) && c[1].test(msg)); return c ? c[2] : undefined; };
+
 const stop = text => { console.error(hook ? `FTypechecks could not run after editing ${edited}.\n${text}` : text); process.exit(hook ? 2 : 1); };
 
 let cfg;
@@ -75,6 +102,8 @@ try { cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8')); } catch (e) { stop(`${
 if ( typeof cfg.package !== 'string' || ! Array.isArray(cfg.sources) || ! cfg.sources.length )
   stop(`${cfgFile} needs "package" (a string) and "sources" (a list of folders).`);
 
+const level = cfg.level || 'strict';
+if ( level !== 'strict' && level !== 'foam' ) stop(`"level" in ${cfgFile} must be "strict" or "foam".`);
 const base = path.dirname(cfgFile);
 const app  = path.resolve(base, cfg.app || '.');
 const dirs = cfg.sources.map(s => path.resolve(app, s));
@@ -102,7 +131,7 @@ const reportFile = path.join(work, 'report.json');
 try { fs.unlinkSync(reportFile); } catch (e) {}
 const gen = spawnSync(process.execPath, [path.join(__dirname, 'gen-types.js')], {
   cwd: work, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
-  env: { ...process.env, FOAM_APP: app, FOAM_DTS_OUT: path.join(work, 'app.d.ts'), FOAM_STYLE: cfg.package, FOAM_REPORT: reportFile }
+  env: { ...process.env, FOAM_APP: app, FOAM_DTS_OUT: path.join(work, 'app.d.ts'), FOAM_STYLE: cfg.package, FOAM_REPORT: reportFile, FOAM_LEVEL: level }
 });
 if ( gen.status !== 0 || ! fs.existsSync(reportFile) )
   stop('The models did not load. Last lines:\n' + ((gen.stdout || '') + (gen.stderr || '')).trim().split('\n').slice(-25).join('\n'));
@@ -145,6 +174,17 @@ for ( const l of ((tsc.stdout || '') + (tsc.stderr || '')).split('\n') ) {
   const m = l.match(/^(.+?)\((\d+),(\d+)\): error (TS\d+): (.*)$/);
   if ( m ) {
     const file = relApp(path.resolve(work, m[1]));
+    // A plain script with no FOAM model in it (a Node runner, a helper) is not checked.
+    if ( ! MODEL.test(sourceText(path.resolve(work, m[1]))) ) { last = null; continue; }
+    if ( level === 'foam' ) {
+      last = null;
+      if ( ! KEEP.has(m[4]) ) continue;
+      // Wrong type, where the wanted type was made up from plain JavaScript.
+      const want = (m[4] === 'TS2345' || m[4] === 'TS2322') && m[5].match(/assignable to (?:parameter of )?type '(.*?)'\.?$/);
+      if ( want && madeUp(want[1]) ) continue;
+      const nm = (m[4] === 'TS2339' || m[4] === 'TS2551') && m[5].match(/does not exist on type '(.*?)'\./);
+      if ( nm && madeUp(nm[1]) ) continue;
+    }
     const un = (m[4] === 'TS2339' || m[4] === 'TS2551') && m[5].match(/^Property '([^']+)' does not exist on type '(.*?)'\./);
     if ( un ) {
       last = null;
@@ -161,7 +201,7 @@ for ( const l of ((tsc.stdout || '') + (tsc.stderr || '')).split('\n') ) {
         continue;
       }
     }
-    last = { file, line: +m[2], kind: 'type', title: `${TS_LABEL[m[4]] || 'Type error'} (${m[4]})`, detail: m[5], group: 'type errors', key: `type|${file}|${m[4]}|${m[5]}` };
+    last = { file, line: +m[2], kind: 'type', title: `${TS_LABEL[m[4]] || 'Type error'} (${m[4]})`, detail: m[5], fix: cleanupFix(m[4], m[5]), group: 'type errors', key: `type|${file}|${m[4]}|${m[5]}` };
     problems.push(last);
   } else if ( last && /^\s+\S/.test(l) ) last.detail += '\n' + l.trim();   // rest of a long message
   else if ( /error TS\d+/.test(l) ) problems.push(last = { file: '(TypeScript)', line: 0, kind: 'type', title: 'TypeScript could not run the check', detail: l.trim(), group: 'type errors', key: `type||${l.trim()}` });
@@ -205,7 +245,7 @@ const named = (n, group) => `${n} ${n === 1 ? ONE[group] : group}`;
 const showFile = ps => {
   const out = [];
   for ( const p of ps.filter(p => p.kind !== 'style').sort((a, b) => a.line - b.line) )
-    out.push(`  ${p.line ? `line ${p.line}: ` : ''}${red(p.title)}` + (p.detail ? '\n' + p.detail.split('\n').map(d => pad + d).join('\n') : ''));
+    out.push(`  ${p.line ? `line ${p.line}: ` : ''}${red(p.title)}` + (p.detail ? '\n' + p.detail.split('\n').map(d => pad + d).join('\n') : '') + (p.fix ? `\n${pad}Fix: ${p.fix}` : ''));
   const rules = new Map();
   for ( const p of ps.filter(p => p.kind === 'style') ) { if ( ! rules.has(p.group) ) rules.set(p.group, []); rules.get(p.group).push(p); }
   for ( const [group, list] of rules )
