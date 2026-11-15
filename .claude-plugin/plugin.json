@@ -1,0 +1,9 @@
+{
+  "name": "foam-type-check",
+  "displayName": "FOAM Type Check",
+  "version": "0.1.0",
+  "description": "Type-checks FOAM3 model code with the TypeScript checker after each edit. No source rewriting, no foam3 changes.",
+  "author": { "name": "Ajeet Gill" },
+  "license": "Apache-2.0",
+  "keywords": ["foam", "foam3", "typescript", "type-check"]
+}
