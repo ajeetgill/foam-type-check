@@ -125,8 +125,13 @@ Problems are grouped by file. Each has a plain-language title.
   property. FOAM would silently drop it.
 - `line N: Wrong number of arguments` / `Wrong type`: a wrong call to a typed method.
 - `The models did not load`: a syntax error or a load error. Read the last lines.
+- `N undeclared fields: x (on Y)`: the code sets a field that class Y does not
+  declare. Declare it in `properties`.
 - `N older problems on the starting list are not shown`: not an error. Old code
   that is still to be converted.
+- `Only the edited file was checked`: on a big app the hook checks one file, to
+  stay fast. Before you say the work is done, run the full check with the
+  command above. It finds problems the edit caused in other files.
 
 A new method or property is known to the check only after the types are
 regenerated. The check does that itself on every run.

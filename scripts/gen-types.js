@@ -24,7 +24,14 @@ if ( process.env.FOAM_APP ) {
   // Keep FOAM's failed assertions: a model can load and still be broken
   // (an import with no key). They are printed at the end.
   const realAssertFn = console.assert;
-  console.assert = (ok, ...msg) => { if ( ! ok ) LOAD_ASSERTS.push(`${CURRENT || (globalThis.foam && globalThis.foam.sourceFile) || ''}: ${msg.join(' ')}`); };
+  console.assert = (ok, ...msg) => {
+    if ( ok ) return;
+    const text = msg.join(' ');
+    // Our own lookup of an id that is not a class (a file that only has "refines:").
+    // That is not a problem in the code.
+    if ( CURRENT && text === `Could not find any registered class for ${CURRENT}` ) return;
+    LOAD_ASSERTS.push(`${CURRENT || (globalThis.foam && globalThis.foam.sourceFile) || ''}: ${text}`);
+  };
   require(path.join(app, 'foam3/src/foam_node.js'));
   globalThis.foam.flags.node = true;
   require(path.join(app, 'pom.js'));
@@ -81,7 +88,14 @@ const isPkg = o => o && typeof o === 'object' && Object.getPrototypeOf(o) === Ob
 // Lazy classes that need files outside the slice print warnings. Hide them.
 const realAssert = console.assert, realError = console.error;
 console.error = () => {};
-console.assert = (ok, ...msg) => { if ( ! ok ) LOAD_ASSERTS.push(`${CURRENT}: ${msg.join(' ')}`); };
+console.assert = (ok, ...msg) => {
+  if ( ok ) return;
+  const text = msg.join(' ');
+  // Our own lookup of an id that is not a class (a file that only has "refines:").
+  // That is not a problem in the code.
+  if ( text === `Could not find any registered class for ${CURRENT}` ) return;
+  LOAD_ASSERTS.push(`${CURRENT}: ${text}`);
+};
 
 const tree = {};      // package tree: { foam: { parse: { Literal: {__cls} } } }
 const known = [];     // ids that made it into the output
@@ -301,7 +315,11 @@ function emitClass(name, cls, ind) {
   // 2. The args: what you may pass to create({...}). No index signature,
   //    so a wrong key is an error.
   out.push(`${ind}interface ${name}$Args${pid ? ` extends ${tsId(pid)}$Args` : ''} {`);
-  for ( const p of props ) out.push(`${ind}  ${q(p.name)}?: ${mine.get(p.name) === 'any' ? 'any' : TYPES[p.cls_.id] || 'any'};`);
+  for ( const p of props ) {
+    out.push(`${ind}  ${q(p.name)}?: ${mine.get(p.name) === 'any' ? 'any' : TYPES[p.cls_.id] || 'any'};`);
+    // create({ name$: slot }) binds the property to a slot. FOAM accepts it for every property.
+    out.push(`${ind}  ${q(p.name + '$')}?: any;`);
+  }
   out.push(`${ind}}`);
 
   // 3. The class object itself.
@@ -358,6 +376,10 @@ const lines = [
   '// FOAM has classes named Date and Promise. These always mean the JavaScript ones.',
   'type $JsDate = Date;',
   'type $JsPromise<T> = Promise<T>;',
+  '',
+  '// DOM elements: querySelector() gives a plain Element, and FOAM code then reads',
+  '// .value, .checked and so on. Plain JavaScript cannot cast, so allow any member.',
+  'interface Element { [name: string]: any; }',
   '',
   'declare namespace foam {',
   ...(HAS_DAO ? [

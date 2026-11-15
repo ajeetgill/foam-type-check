@@ -12,6 +12,8 @@
 //   package  the package prefix the style rules apply to
 //   sources  the folders to type-check, relative to the app folder
 //   tsc      optional: path to the TypeScript "tsc" program, relative to the config file
+//   hook     optional: what the hook checks after an edit. "file": only the edited file (fast).
+//            "all": every source folder. Default: "all" up to 100 source files, "file" above that.
 // The starting list is foam-check.baseline.json, next to the config file. Commit it.
 // Generated files go to .foam-check/ next to the config file. Add that folder to .gitignore.
 const fs = require('fs'), path = require('path'), { spawnSync } = require('child_process');
@@ -38,7 +40,8 @@ const RULES = {
   'property has no class':                { group: 'properties with no class',       one: 'property with no class',         fix: "Add a class, for example class: 'String'." },
   'argument has no type':                 { group: 'methods with untyped arguments', one: 'method with untyped arguments',  fix: "Use the object form: { name, args: 'Type name', code: function(name) {...} }." },
   'import has no type':                   { group: 'imports with no type',           one: 'import with no type',            fix: "Use the object form: { name: 'x', key: 'x', type: 'Type' }." },
-  'DAO import does not say what it holds': { group: 'DAO imports with no "of"',       one: 'DAO import with no "of"',        fix: "Add of: '<class id>' to the import." }
+  'DAO import does not say what it holds': { group: 'DAO imports with no "of"',       one: 'DAO import with no "of"',        fix: "Add of: '<class id>' to the import." },
+  'undeclared field':                     { group: 'undeclared fields',              one: 'undeclared field',               fix: "The code sets this on a FOAM object, but the class does not declare it. Declare it in properties, for example { class: 'Boolean', name: 'x' }." }
 };
 
 // ---------- find the app ----------
@@ -82,6 +85,14 @@ if ( hook && ! inSources(edited) ) process.exit(0);
 for ( const need of ['foam3/src/foam_node.js', 'pom.js'] )
   if ( ! fs.existsSync(path.join(app, need)) ) stop(`${path.join(app, need)} not found. Check "app" in ${cfgFile}.`);
 
+// Every .js file in the checked folders.
+const sourceFiles = [];
+const walk = d => { for ( const e of fs.readdirSync(d, { withFileTypes: true }) ) { const f = path.join(d, e.name); if ( e.isDirectory() ) walk(f); else if ( e.name.endsWith('.js') ) sourceFiles.push(f); } };
+dirs.filter(d => fs.existsSync(d)).forEach(walk);
+// After an edit, a big app checks only the edited file: the full check is too slow to run on every edit.
+if ( cfg.hook && cfg.hook !== 'file' && cfg.hook !== 'all' ) stop(`"hook" in ${cfgFile} must be "file" or "all".`);
+const oneFile = hook && (cfg.hook || (sourceFiles.length > 100 ? 'file' : 'all')) === 'file';
+
 const work = path.join(base, '.foam-check');
 fs.mkdirSync(work, { recursive: true });
 const relApp = f => f ? path.relative(app, path.resolve(app, f)).split(path.sep).join('/') : '(no file)';
@@ -111,9 +122,10 @@ for ( const s of report.style ) problems.push({
 
 // ---------- 2. type check ----------
 const rel = p => path.relative(work, p).split(path.sep).join('/');
-fs.writeFileSync(path.join(work, 'tsconfig.json'), JSON.stringify({
+const tsconfig = oneFile ? 'tsconfig.hook.json' : 'tsconfig.json';
+fs.writeFileSync(path.join(work, tsconfig), JSON.stringify({
   compilerOptions: { allowJs: true, checkJs: true, noEmit: true, strict: false, target: 'es2022', lib: ['es2022', 'dom'], types: [] },
-  include: ['app.d.ts', ...dirs.map(d => rel(d) + '/**/*.js')]
+  ...(oneFile ? { files: ['app.d.ts', rel(edited)] } : { include: ['app.d.ts', ...dirs.map(d => rel(d) + '/**/*.js')] })
 }, null, 2) + '\n');
 
 // TypeScript: the config's "tsc", then the app's own install, then the plugin's.
@@ -124,18 +136,39 @@ const tscPath = [
 ].filter(Boolean).find(p => fs.existsSync(p));
 if ( ! tscPath ) stop(`TypeScript not found. Run "npm install --save-dev typescript" in ${base}, or set "tsc" in ${cfgFile}.`);
 
-const tsc = spawnSync(tscPath, ['-p', 'tsconfig.json', '--pretty', 'false'], { cwd: work, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+const tsc = spawnSync(tscPath, ['-p', tsconfig, '--pretty', 'false'], { cwd: work, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 if ( tsc.error ) stop(`Could not run ${tscPath}: ${tsc.error.message}`);
+const texts = new Map();
+const sourceText = f => { if ( ! texts.has(f) ) { let t = ''; try { t = fs.readFileSync(f, 'utf8'); } catch (e) {} texts.set(f, t); } return texts.get(f); };
 let last = null;
 for ( const l of ((tsc.stdout || '') + (tsc.stderr || '')).split('\n') ) {
   const m = l.match(/^(.+?)\((\d+),(\d+)\): error (TS\d+): (.*)$/);
   if ( m ) {
     const file = relApp(path.resolve(work, m[1]));
+    const un = (m[4] === 'TS2339' || m[4] === 'TS2551') && m[5].match(/^Property '([^']+)' does not exist on type '(.*?)'\./);
+    if ( un ) {
+      last = null;
+      // A plain JavaScript object ({}) that gets fields added later. Not FOAM's business.
+      if ( un[2] === '{}' ) continue;
+      // The same file assigns this member (x.name = ...): a field that is used but never declared.
+      // That is a style point, not a wrong name. One line per field, however often it is used.
+      if ( new RegExp('\\.' + un[1].replace(/[$]/g, '\\$&') + '\\s*=(?!=)').test(sourceText(path.resolve(work, m[1]))) ) {
+        const key = `field|${file}|${un[2]}.${un[1]}`;
+        if ( ! problems.some(p => p.key === key) ) problems.push({
+          file, line: 0, kind: 'style', title: `undeclared field ${un[1]}`, member: `${un[1]} (on ${un[2]})`,
+          fix: RULES['undeclared field'].fix, group: RULES['undeclared field'].group, key
+        });
+        continue;
+      }
+    }
     last = { file, line: +m[2], kind: 'type', title: `${TS_LABEL[m[4]] || 'Type error'} (${m[4]})`, detail: m[5], group: 'type errors', key: `type|${file}|${m[4]}|${m[5]}` };
     problems.push(last);
   } else if ( last && /^\s+\S/.test(l) ) last.detail += '\n' + l.trim();   // rest of a long message
   else if ( /error TS\d+/.test(l) ) problems.push(last = { file: '(TypeScript)', line: 0, kind: 'type', title: 'TypeScript could not run the check', detail: l.trim(), group: 'type errors', key: `type||${l.trim()}` });
 }
+
+// After an edit in "file" mode, only the edited file was type-checked: report only that file.
+if ( oneFile ) { const mine = relApp(edited); for ( let i = problems.length - 1; i >= 0; i-- ) if ( problems[i].file !== mine ) problems.splice(i, 1); }
 
 // ---------- starting list ----------
 const count = list => list.reduce((m, p) => (m[p.key] = (m[p.key] || 0) + 1, m), {});
@@ -160,7 +193,7 @@ if ( ! flags.has('--all') && ! flags.has('--report') && fs.existsSync(baseFile) 
 // A problem is new when there are more of its kind now than on the starting list.
 const fresh = hasBase ? problems.filter(p => now[p.key] > (listed[p.key] || 0)) : problems;
 const older = problems.length - fresh.length;
-const fixed = Object.keys(listed).reduce((n, k) => n + Math.max(0, listed[k] - (now[k] || 0)), 0);
+const fixed = oneFile ? 0 : Object.keys(listed).reduce((n, k) => n + Math.max(0, listed[k] - (now[k] || 0)), 0);
 
 // ---------- output ----------
 const byFile = list => { const m = new Map(); for ( const p of list ) { if ( ! m.has(p.file) ) m.set(p.file, []); m.get(p.file).push(p); } return m; };
@@ -182,9 +215,7 @@ const showFile = ps => {
 const show = list => [...byFile(list)].map(([file, ps]) => bold(file) + '\n' + showFile(ps)).join('\n\n');
 
 if ( flags.has('--report') ) {
-  const all = [];
-  const walk = d => { for ( const e of fs.readdirSync(d, { withFileTypes: true }) ) { const f = path.join(d, e.name); if ( e.isDirectory() ) walk(f); else if ( e.name.endsWith('.js') ) all.push(relApp(f)); } };
-  dirs.filter(d => fs.existsSync(d)).forEach(walk);
+  const all = sourceFiles.map(relApp);
   const files = byFile(problems), groups = count(problems.map(p => ({ key: p.group })));
   const clean = all.filter(f => ! files.has(f)).length;
   const out = [bold(`FTypechecks conversion report: ${cfg.package}`), ''];
@@ -210,7 +241,8 @@ if ( flags.has('--report') ) {
 }
 
 const notes = [];
-if ( hasBase && older ) notes.push(`${plural(older, 'older problem')} on the starting list ${older === 1 ? 'is' : 'are'} not shown. See them with --all.`);
+if ( oneFile ) notes.push('Only the edited file was checked. Run the full check before you finish: node check.js');
+if ( hasBase && older && ! oneFile ) notes.push(`${plural(older, 'older problem')} on the starting list ${older === 1 ? 'is' : 'are'} not shown. See them with --all.`);
 if ( hasBase && fixed ) notes.push(`${plural(fixed, 'problem')} from the starting list ${fixed === 1 ? 'is' : 'are'} fixed. Run --baseline to shrink the list.`);
 
 if ( ! fresh.length ) {

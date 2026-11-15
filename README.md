@@ -6,7 +6,7 @@ A Claude Code plugin. It type-checks FOAM3 model code with the TypeScript checke
 - It needs no change to foam3.
 - It works on new code and on existing code.
 
-Status: an experiment. Tested on one small app.
+Status: an experiment. Tested on one small app and tried once on one big app.
 
 ## Why
 
@@ -65,6 +65,9 @@ the FOAM tutorial app. Its layout:
      classes are `com.foamdev.cook.<Name>`.
    - `sources`: the folders to check, relative to the app folder.
    - `tsc` (optional): path to the TypeScript `tsc` program, if it is not in the app's `node_modules`.
+   - `hook` (optional): what the hook checks after an edit. `"file"`: only the
+     edited file. `"all"`: every source folder. Default: `"all"` up to 100
+     source files, `"file"` above that.
 2. Install TypeScript in the app folder: `npm install --save-dev typescript`.
 3. Add `.foam-check/` to `.gitignore`. Generated files go there.
 4. Run the check from the app folder:
@@ -272,6 +275,44 @@ When `--report` shows 0 problems, delete `foam-check.baseline.json`.
 - **A wrong type guess.** We wrote a class where the value was a name string. The check caught it at the call.
 - **The check is not a test.** After converting, run the app and click through the changed screens.
 
+## Big apps: the main blocker
+
+The biggest blocker is the work, not the tool: old code has to be converted by
+hand, file by file, and the check finds little in a file until that file
+follows the four rules. Speed was the second blocker, because a full check
+re-reads every source file. So on a big app the hook checks only the edited
+file, and you run the full check yourself before you finish.
+
+Measured on one big app (1,144 source files):
+
+- Full check: about 35 seconds.
+- Hook after an edit, one file: 7 to 11 seconds.
+- First report: 2,685 problems in 275 files. 2,524 of them are the four style rules.
+
+After an edit, the one-file check can miss a problem you caused in **another**
+file, for example a renamed method that is still called elsewhere. The full
+check finds it.
+
+## Undeclared fields
+
+Code sometimes sets a field that the class never declares:
+
+    this.opening_ = true;            // no property named opening_
+    var dao = this.ProxyDAO.create();
+    dao.refuseWith = '';             // ProxyDAO has no refuseWith
+
+This is reported as its own line, once per field:
+
+      2 undeclared fields: opening_ (on ReaderView), refuseWith (on ProxyDAO)
+          Fix: ... Declare it in properties, for example { class: 'Boolean', name: 'x' }.
+
+## Not flagged on purpose
+
+- A file that only has `refines:`. Refinements are not checked.
+- `create({ name$: slot })`. FOAM binds the property to the slot.
+- Members of DOM elements, such as `.value` after `querySelector()`.
+- Fields added to a plain JavaScript object (`var o = {}; o.x = 1`).
+
 ## Not checked
 
 Null and undefined values, a missing argument, the context, relationship properties, `dynamic(...)`
@@ -301,7 +342,11 @@ new method or property is known at once.
 - Every example in this README was planted and run: 9 are reported, and the 1 marked "not reported" is not.
 - A project with no config file: the hook does nothing.
 
-Not tested: other apps, other foam3 versions, an app with several `pom.js` files.
+- One big app (1,144 files), read-only: the numbers above. Three groups of
+  false alarms found there are fixed (refinement files, `name$` keys, DOM members).
+  128 type errors remain there. They are not sorted into real bugs and false alarms.
+
+Not tested: other foam3 versions, an app with several `pom.js` files, a full conversion of a big app.
 
 ## Licence
 
