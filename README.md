@@ -91,6 +91,7 @@ Run from the app folder, or give the app folder as the first argument.
 | `node scripts/check.js --report` | Conversion report: what is left to convert, per file. |
 | `node scripts/check.js --baseline` | Write the starting list: accept today's problems. |
 | `node scripts/check.js --all` | Check and ignore the starting list. |
+| `node scripts/check.js --editor` | Write `jsconfig.json` in the app, so VS Code knows the FOAM types while you type. |
 
 ## The four style rules, with examples
 
@@ -291,9 +292,31 @@ Measured on one big app (1,144 source files):
 - First report at level `strict`: 2,668 problems. 2,524 of them are the four style rules, 109 are type errors, 35 are undeclared fields.
 - At level `foam`: 8 type errors, 24 undeclared fields.
 
-After an edit, the one-file check can miss a problem you caused in **another**
-file, for example a renamed method that is still called elsewhere. The full
-check finds it.
+### A change that breaks another file
+
+After an edit, the check also looks at the files that **use** a class you
+changed. It compares each class's shape (its properties and method signatures)
+with the last run. A change inside a method body changes no shape, so it adds
+nothing. A rename does.
+
+Example: rename the property `removeLabel` of `Chip` to `removeLabelX`. The check
+then also checks the 23 files that name `Chip`, and reports the 2 that still pass
+`removeLabel` in `start(this.Chip, { removeLabel: ... })`.
+
+In those other files it shows only problems that are new since the last run.
+Their old problems are not caused by your edit.
+
+### Batch mode: one check per turn
+
+`"hook": "batch"` in the config: after an edit, the hook only notes the file.
+When Claude finishes its turn, one run checks every file edited in that turn
+(the Stop hook). If there are problems, Claude goes on and fixes them. If the
+same problems come back a second time, Claude may stop; the files stay on the
+list for the next turn.
+
+Measured on the big app: 3 edits checked one by one, 14.8 seconds. The same 3
+edits in batch mode: 0.2 seconds for the edits, then one check of 5.6 seconds.
+The more edits in a turn, the bigger the saving.
 
 ### Faster with the FOAM LSP (experiment)
 
@@ -340,6 +363,43 @@ broken import. These are the mistakes that otherwise need a build and a test
 run to find. Plain JavaScript findings are dropped, and browser objects accept
 any member. Use this to start on a big code base with less noise.
 
+**One file can set its own level** in its first lines, like Sorbet's sigils:
+
+    // ftypechecks: off       not checked at all
+    // ftypechecks: foam      level "foam" for this file
+    // ftypechecks: strict    level "strict" for this file
+
+So a big app can run at level `foam` and turn files to `strict` one by one, or
+turn off a file it cannot convert yet.
+
+## Journals (.jrl)
+
+Every `.jrl` file in git is checked against the live classes (or the folders in
+`"journals"` in the config; `false` turns this off). Each of these costs a server
+restart to find, and some fail with no error:
+
+| Problem | What FOAM does |
+| :- | :- |
+| A row over several lines whose first line is not exactly `p({` | reads each line as a row: the row loads half-filled |
+| A line that is not a row and not a comment | fails on it |
+| A row that does not parse | skips it |
+| An unknown class | skips the row |
+| An unknown key | drops the value, no error |
+| Two or more rows of a class with no id | gives them all the same empty id: only the last survives |
+
+A row with no `class` is checked as the class the file's other rows name. A
+class that FOAM does not load in Node (Java-only, tests) is found in the source
+files, so it is not reported as unknown. After you edit a journal, the hook
+checks that journal only.
+
+## Types in your editor
+
+`node scripts/check.js --editor` writes `jsconfig.json` in the app. VS Code (and
+other editors that use TypeScript) then know every FOAM class: autocomplete and
+hover types in every model file. For red underlines in a file, put `// @ts-check`
+on its first line. Every check rewrites the types, so the editor stays current.
+Note: VS Code ships its own, older TypeScript; this was tested with TypeScript 7.
+
 ## Mixins
 
 A class that another class takes in with `mixins: [...]` is checked as its
@@ -357,7 +417,7 @@ is not checked.
 
 Null and undefined values, a missing argument, the context, relationship properties, `dynamic(...)`
 arguments, listener and action arguments, classes with `refines:` or no package,
-Java, CSS, journals.
+Java, CSS.
 
 0 problems means no wrong names and no wrong types in the checked parts. It does
 not mean the app works.
@@ -368,7 +428,14 @@ not mean the app works.
    the live models for every class, property and method. It writes one `.d.ts` file.
 2. `scripts/check.js` runs that, collects failed FOAM assertions and broken style
    rules, then runs the TypeScript checker on your sources. Check only.
-3. The hook runs `check.js` after each edit and sends problems back to Claude.
+3. The hook runs `check.js` after each edit (or, in batch mode, once per turn)
+   and sends problems back to Claude.
+
+Inside `check.js`: the settings are read once; then the first **type provider**
+that can answer writes the types (a running FOAM LSP, else a FOAM load); then each
+**problem source** (FOAM assertions, style rules, journals, TypeScript) adds its
+problems; then the scope is applied; then the mode prints. Every rule, its name
+and its fix, is in one table: `scripts/rules.js`.
 
 It takes about 5 seconds on a small app. Every run regenerates the types, so a
 new method or property is known at once.

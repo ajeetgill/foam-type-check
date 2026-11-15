@@ -19,6 +19,7 @@ around it.
     node "${CLAUDE_PLUGIN_ROOT}/scripts/check.js" <app folder> --report    what is left to convert, per file
     node "${CLAUDE_PLUGIN_ROOT}/scripts/check.js" <app folder> --baseline  accept today's problems (starting list)
     node "${CLAUDE_PLUGIN_ROOT}/scripts/check.js" <app folder> --all       check, ignoring the starting list
+    node "${CLAUDE_PLUGIN_ROOT}/scripts/check.js" <app folder> --editor    write jsconfig.json: FOAM types in VS Code
 
 Exit code 0: no problems (or no new ones). Exit code 1: problems, printed. It takes a few seconds.
 
@@ -143,7 +144,20 @@ regenerated. The check does that itself on every run.
 
 Null and undefined values, a missing argument, anything read from the context, relationship
 properties, `dynamic(...)` arguments, listener and action arguments, classes
-with `refines:` or with no package, Java, CSS, journals.
+with `refines:` or with no package, Java, CSS.
+
+## Also checked
+
+- Journals (.jrl): rows split over lines, lines read as rows, rows that do not
+  parse, unknown classes, unknown keys (silently dropped), several rows of one
+  class with no id (only the last survives). Fix these like code problems.
+- Files that use a class you changed: a rename can break them. The hook reports
+  their new problems under their own file names.
+- A file can set its own level in its first lines: `// ftypechecks: off`,
+  `// ftypechecks: foam` or `// ftypechecks: strict`. Do not add `off` to hide a
+  problem. Fix the problem.
+- `"hook": "batch"`: the check runs once when you finish your turn, for every file
+  you edited. If it reports problems, fix them before you finish.
 
 0 problems means no wrong names and no wrong types in the checked parts. It does
 not mean the app works.

@@ -52,7 +52,13 @@ if ( CLI ) for ( const f of process.argv.slice(2) ) {
 // Write the types file (and the style report) from the FOAM that is loaded now.
 // Run from check.js through the command line, or called by a process that already
 // has the app's FOAM loaded (the FOAM LSP), which skips the slow FOAM load.
-//   opts: { out, style, report, level, foam, log }
+//   opts: { out, style, report, level, foam, log, app, journals (list of .jrl paths) }
+// A JSON file holding a list of paths (the journals to check), or nothing.
+function readList(file) {
+  if ( ! file ) return [];
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return []; }
+}
+
 function generate(opts) {
   foam = opts.foam || globalThis.foam;
   if ( ! CLI ) { LOAD_ASSERTS.length = 0; CURRENT = ''; }
@@ -69,19 +75,6 @@ function generate(opts) {
 
 function generate_(opts, log) {
 
-  // FOAM property class -> TypeScript type. Anything not listed is `any`.
-  const TYPES = {
-    'foam.lang.String':   'string',
-    'foam.lang.Boolean':  'boolean',
-    'foam.lang.Int':      'number',
-    'foam.lang.Long':     'number',
-    'foam.lang.Float':    'number',
-    'foam.lang.Double':   'number',
-    'foam.lang.Function': '(...args: any[]) => any',
-    'foam.lang.Array':    'any[]',
-    'foam.lang.StringArray': 'string[]',
-    'foam.lang.FObjectArray': 'any[]',
-  };
 
   // Every class id FOAM knows about (loaded, lazy, or cached in the context).
   const ids = new Set([
@@ -157,31 +150,56 @@ function generate_(opts, log) {
     return knownSet.has(t) ? tsId(t) : 'any';
   }
 
-  // A property's type. `loose` = FOAM adapts what you assign (a map becomes an
-  // object, a name becomes an enum value), so reading is typed, writing is any.
+  // A property's type, from its property class (one entry each).
+  //   t      the TypeScript type
+  //   loose  FOAM adapts what you assign (a map becomes an object, a name becomes an
+  //          enum value), so reading is typed and writing is any
+  //   find   for a reference: what find() on it returns
+  // `of` is the class the property holds, when FOAM knows it; else null.
   const HAS_DAO = knownSet.has('foam.dao.DAO') && knownSet.has('foam.dao.ArraySink');
+  const is   = t => () => ({ t });
+  const PROP_TYPES = {
+    'foam.lang.String':      is('string'),
+    'foam.lang.Boolean':     is('boolean'),
+    'foam.lang.Int':         is('number'),
+    'foam.lang.Long':        is('number'),
+    'foam.lang.Float':       is('number'),
+    'foam.lang.Double':      is('number'),
+    'foam.lang.Function':    is('(...args: any[]) => any'),
+    'foam.lang.Array':       is('any[]'),
+    'foam.lang.StringArray': is('string[]'),
+    'foam.lang.FObjectProperty': of => of ? { t: tsId(of), loose: true } : { t: 'any' },
+    'foam.lang.Enum':            of => of ? { t: tsId(of), loose: true } : { t: 'any' },
+    'foam.lang.FObjectArray':    of => of ? { t: tsId(of) + '[]', loose: true } : { t: 'any[]' },
+    // A DAO that says what it holds: find() and select() give that class back.
+    'foam.dao.DAOProperty':      of => ! HAS_DAO ? { t: 'any' } : { t: of ? `foam.$DAO<${tsId(of)}>` : 'foam.dao.DAO', loose: true },
+    // A reference holds the id of the other object, not the object.
+    'foam.lang.Reference': of => {
+      let idp; try { idp = of && foam.lookup(of).getAxiomByName('id'); } catch (e) {}
+      const t = idp && PROP_TYPES[idp.cls_.id] && PROP_TYPES[idp.cls_.id](null).t;
+      return t === 'string' || t === 'number' ? { t, loose: true, find: `$JsPromise<${tsId(of)}>` } : { t: 'any' };
+    },
+    'foam.lang.Date':     () => ({ t: '$JsDate', loose: true }),
+    'foam.lang.DateTime': () => ({ t: '$JsDate', loose: true }),
+    'foam.lang.Map':      () => ({ t: '{ [key: string]: any }', loose: true })
+  };
+
+  // What create({...}) accepts for a property: its type, unless FOAM adapts the value.
+  function argType(p) {
+    const pt = propType(p);
+    return ! pt.loose ? pt.t : pt.t.endsWith('[]') ? 'any[]' : 'any';
+  }
 
   function propType(p) {
     const k = p.cls_.id;
     let of; try { of = p.of && (typeof p.of === 'string' ? p.of : p.of.id); } catch (e) {}
     // A DAOProperty with no `of` gets FOAM's default, foam.dao.DAO: it says nothing.
     if ( k === 'foam.dao.DAOProperty' && of === 'foam.dao.DAO' ) of = null;
-    if ( of && knownSet.has(of) ) {
-      if ( k === 'foam.lang.FObjectProperty' || k === 'foam.lang.Enum' ) return { t: tsId(of), loose: true };
-      if ( k === 'foam.lang.FObjectArray' ) return { t: tsId(of) + '[]', loose: true };
-      // A DAO that says what it holds: find() and select() give that class back.
-      if ( k === 'foam.dao.DAOProperty' && HAS_DAO ) return { t: `foam.$DAO<${tsId(of)}>`, loose: true };
-      // A reference holds the id of the other object, not the object.
-      if ( k === 'foam.lang.Reference' ) {
-        let idp; try { idp = foam.lookup(of).getAxiomByName('id'); } catch (e) {}
-        const t = idp && TYPES[idp.cls_.id];
-        if ( t === 'string' || t === 'number' ) return { t, loose: true, find: `$JsPromise<${tsId(of)}>` };
-      }
-    }
-    if ( k === 'foam.dao.DAOProperty' && HAS_DAO ) return { t: 'foam.dao.DAO', loose: true };
-    if ( k === 'foam.lang.Date' || k === 'foam.lang.DateTime' ) return { t: '$JsDate', loose: true };
-    if ( k === 'foam.lang.Map' ) return { t: '{ [key: string]: any }', loose: true };
-    return { t: TYPES[k] || 'any' };
+    // The nearest entry up the property's class chain: a property class built on
+    // String (EMail, Color, ...) is typed as a String.
+    let type = null;
+    for ( let c = p.cls_; c && c.id && ! type; c = Object.getPrototypeOf(c) ) type = PROP_TYPES[c.id];
+    return type ? type(of && knownSet.has(of) ? of : null) : { t: 'any' };
   }
 
   // Gap 1: FOAM's own methods rarely declare a return type. Two local stand-ins:
@@ -239,6 +257,7 @@ function generate_(opts, log) {
   const METHODS = new Map();   // class id -> member types for methods that declare types
   const MEMBERS = new Map();   // class id -> Map(member name -> type), own and inherited
 
+  const SHAPES = new Map();   // class id -> hash of its generated types
   function emitClass(name, cls, ind) {
     const parent = Object.getPrototypeOf(cls);
     const pid    = parent && parent.id !== cls.id && knownSet.has(parent.id) ? parent.id : null;
@@ -270,9 +289,14 @@ function generate_(opts, log) {
         const body = sg.replace(/\): this$/, `): ${tsId(cls.id)}`);   // `this` type is not allowed in a type literal
         if ( /\?: (?!any)|\): (?!any$)/.test(sg) ) typed.push(`{ name: ${q(m.name)}; code?(this: ${tsId(cls.id)}, ${body.slice(1).replace(/^\)/, '...none: never[])')}; [key: string]: any } & ThisType<any>`);
       }
-      // start(SomeView, {...}) returns the new SomeView (start('div') a plain Element).
-      if ( m.name === 'start' && U2 && typeof m.code === 'function' && ( cls === U2 || U2.isSubClass(cls) ) )
-        out.push(`${ind}  "start"<C extends foam.$Base>(spec: foam.$Class<C, any>, ...rest: any[]): C;`);
+      // start(SomeView, {...}) returns the new SomeView (start('div') a plain Element), and
+      // its {...} must be SomeView's properties. `0 extends (1 & S)` is true only when S is
+      // any (an untyped value): then nothing is checked and the result is a plain Element.
+      if ( m.name === 'start' && U2 && typeof m.code === 'function' && ( cls === U2 || U2.isSubClass(cls) ) ) {
+        typeOf(m.name, sg);
+        out.push(`${ind}  "start"<S>(spec?: S, args?: 0 extends (1 & S) ? any : S extends foam.$Class<any, infer A> ? A : any, ...rest: any[]): 0 extends (1 & S) ? foam.u2.Element : S extends foam.$Class<infer C, any> ? C : foam.u2.Element;`);
+        continue;
+      }
       out.push(typeOf(m.name, sg) === sg ? `${ind}  ${q(m.name)}${sg};` : `${ind}  ${q(m.name)}: any;`);
     }
     // Methods that declare types: their bodies are checked against the declaration.
@@ -344,7 +368,7 @@ function generate_(opts, log) {
     //    so a wrong key is an error.
     out.push(`${ind}interface ${name}$Args${pid ? ` extends ${tsId(pid)}$Args` : ''} {`);
     for ( const p of props ) {
-      out.push(`${ind}  ${q(p.name)}?: ${mine.get(p.name) === 'any' ? 'any' : TYPES[p.cls_.id] || 'any'};`);
+      out.push(`${ind}  ${q(p.name)}?: ${mine.get(p.name) === 'any' ? 'any' : argType(p)};`);
       // create({ name$: slot }) binds the property to a slot. FOAM accepts it for every property.
       out.push(`${ind}  ${q(p.name + '$')}?: any;`);
     }
@@ -352,6 +376,9 @@ function generate_(opts, log) {
 
     // 3. The class object itself.
     out.push(`${ind}const ${name}: foam.$Class<${name}, ${name}$Args>;`);
+    // The class's shape: what other files can see of it. A file that uses this class
+    // needs a new check only when its shape changes (check.js).
+    SHAPES.set(cls.id, require('crypto').createHash('sha1').update(out.map(l => l.slice(ind.length)).join('\n')).digest('hex').slice(0, 12));
     return out;
   }
 
@@ -529,21 +556,29 @@ function generate_(opts, log) {
       if ( ! files.has(f) ) { let t = ''; try { t = fs.readFileSync(f, 'utf8'); } catch (e) {} files.set(f, t); }
       return files.get(f);
     };
+    // The style rules (rules.js): each walks one kind of axiom of each class in the package.
+    const { STYLE } = require('./rules');
     for ( const id of known.filter(i => i.startsWith(PKG)) ) {
       const cls = foam.lookup(id), file = (cls.model_ && cls.model_.source) || '';
-      const add = (kind, member, rule) => found.push({ cls: id, kind, member, rule, file });
-      for ( const p of cls.getOwnAxiomsByClass(foam.lang.Property) )
-        if ( p.cls_.id === 'foam.lang.Property' ) add('property', p.name, 'property has no class');
-      for ( const m of cls.getOwnAxiomsByClass(foam.lang.Method) )
-        // Only methods written in the class's own file (not ones FOAM generates).
-        if ( typeof m.code === 'function' && m.code.length && ownSource(cls).includes(Function.prototype.toString.call(m.code)) &&
-             ! ( Array.isArray(m.args) && m.args.length >= m.code.length && m.args.every(x => x && x.type) ) )
-          add('method', m.name, 'argument has no type');
-      if ( foam.lang.Import ) for ( const im of cls.getOwnAxiomsByClass(foam.lang.Import) )
-        if ( typeof im.type !== 'string' && typeof im.of !== 'string' ) add('import', im.name, 'import has no type');
-        else if ( im.type === 'foam.dao.DAO' && typeof im.of !== 'string' ) add('import', im.name, 'DAO import does not say what it holds');
+      const ctx = { ownSource: () => ownSource(cls) };
+      for ( const rule of STYLE ) {
+        const axiomCls = rule.axiom && foam.lookup(rule.axiom, true);
+        if ( ! axiomCls ) continue;
+        for ( const ax of cls.getOwnAxiomsByClass(axiomCls) ) {
+          if ( rule.bad(ax, ctx) ) found.push({ cls: id, member: ax.name, rule: rule.id, file });
+        }
+      }
     }
-    if ( opts.report ) fs.writeFileSync(opts.report, JSON.stringify({ package: PKG, asserts, style: found }, null, 2));
+    // Journal rows, against the same live classes.
+    const journal = opts.journals && opts.journals.length ? require('./journals').checkJournals({ foam, app: opts.app, files: opts.journals }) : [];
+    // Shapes of the package's classes, with their files.
+    const shapes = {};
+    for ( const id of known.filter(i => i.startsWith(PKG)) ) {
+      const c = foam.lookup(id), file = c.model_ && c.model_.source;
+      if ( file && SHAPES.has(id) ) shapes[id] = { file, hash: SHAPES.get(id) };
+    }
+    if ( opts.report ) fs.writeFileSync(opts.report, JSON.stringify({ package: PKG, asserts, style: found, journal, shapes }, null, 2));
+    for ( const j of journal ) log(`${j.file}:${j.line}: ${j.rule}: ${j.detail}`);
     for ( const a of asserts ) log(`${a.where}: FOAM assertion failed: ${a.message}`);
     for ( const f of found ) log(`${f.cls}.${f.member}: ${f.rule}`);
     log(`style: ${found.length} findings, ${asserts.length} failed assertions in ${PKG}`);
@@ -555,10 +590,11 @@ if ( CLI ) {
   generate({
     out: path.resolve(__dirname, process.env.FOAM_DTS_OUT || 'foam.d.ts'),
     style: process.env.FOAM_STYLE, report: process.env.FOAM_REPORT,
-    level: process.env.FOAM_LEVEL || 'strict', log: console.log
+    level: process.env.FOAM_LEVEL || 'strict', log: console.log,
+    app: process.env.FOAM_APP, journals: readList(process.env.FOAM_JOURNALS)
   });
   // Browser-only classes start async work that fails in Node. The file is written, so stop here.
   process.exit(0);
 }
 
-module.exports = { generate };
+module.exports = { generate, readList };
