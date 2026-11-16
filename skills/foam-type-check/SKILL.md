@@ -108,6 +108,8 @@ How to find the right types:
 - DAO `of`: the class the DAO stores. Check the DAO's definition or a `find`/`put` call.
 - Properties: pick the FOAM property class that matches the stored value
   (`String`, `Int`, `Boolean`, `Date`, `FObjectProperty` with `of`, `Reference` with `of`, ...).
+  A number value does not say which: `Int` for a whole number that fits in 32 bits,
+  `Long` for ids, timestamps and big counts, `Float` for decimals.
 
 Traps:
 
@@ -168,7 +170,7 @@ with `refines:` or with no package, Java, CSS.
 
 - Journals (.jrl): rows split over lines, lines read as rows, rows that do not
   parse, unknown classes, unknown keys (silently dropped), several rows of one
-  class with no id (only the last survives). Fix these like code problems.
+  class with no id (merged into one row). Fix these like code problems.
 - Files that use a class you changed: a rename can break them. The hook reports
   their new problems under their own file names.
 - A file can set its own level in its first lines: `// ftypechecks: off`,

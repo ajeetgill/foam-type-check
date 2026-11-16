@@ -426,7 +426,7 @@ restart to find, and some fail with no error:
 | Text after the row's closing `}` (a key after it, or two rows on one line) | drops it, no error |
 | An unknown class | skips the row |
 | An unknown key | drops the value, no error |
-| Two or more rows of a class with no id | gives them all the same empty id: only the last survives |
+| Two or more rows of a class with no id | gives them all the same empty id and merges them into one row: each key keeps the last row's value |
 
 A row with no `class` is checked as the class the file's other rows name. A
 class that FOAM does not load in Node (Java-only, tests) is found in the source

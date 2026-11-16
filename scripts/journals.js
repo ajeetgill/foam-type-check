@@ -11,7 +11,7 @@
  *     class the file's other rows name, if they all name one)
  *   - a key that is not a property of the class: FOAM drops the value, with no error
  *   - two or more rows of one class with no id: a replay gives them all the same empty
- *     id, so only the last one survives
+ *     id and merges them into one row, each key keeping the last row's value
  *
  * The rows are split exactly as foam.dao.AbstractFileJournal.getEntry splits them:
  * a line that is exactly `p({` (or `r({`, `c({`) starts a row that ends at a line that
@@ -32,24 +32,55 @@ function objectEnd(t) {
   let depth = 0, quote = null;
   for ( let i = 0; i < t.length; i++ ) {
     const c = t[i];
-    if ( quote ) { if ( c === '\\' ) i++; else if ( c === quote ) quote = null; }
-    else if ( c === '"' || c === "'" || c === '`' ) quote = c;     // FOAM's StringParser takes all three
+    if ( quote ) { if ( c === '\\' ) i++; else if ( t.substr(i, quote.length) === quote ) { i += quote.length - 1; quote = null; } }
+    else if ( t.substr(i, 3) === '"""' ) { quote = '"""'; i += 2; }   // FOAM's StringParser takes all four
+    else if ( c === '"' || c === "'" || c === '`' ) quote = c;
     else if ( c === '{' || c === '[' ) depth++;
     else if ( c === '}' || c === ']' ) { if ( --depth === 0 ) return c === '}' ? i : -1; }
     else if ( depth === 0 && ! /\s/.test(c) ) return -1;
   }
   return -1;
 }
+// Each string written as a JSON string holding the value FOAM's StringParser reads
+// (foam3 src/foam/lib/json/StringParser.java): """…""", "…", '…' and `…`, each plain
+// text with \ escapes (\uXXXX, \n \t \r \f \b, else the next character as is). A
+// backtick string is no template: ${…} in it is text. An unclosed string is left as is.
+// The same as the FOAM LSP's JrlHandler.jsonStrings_.
+const ESC = { n: '\n', t: '\t', r: '\r', f: '\f', b: '\b' };
+function jsonStrings(text) {
+  let out = '', i = 0;
+  while ( i < text.length ) {
+    const c = text[i];
+    const q = text.substr(i, 3) === '"""' ? '"""' : ( c === '"' || c === "'" || c === '`' ) ? c : null;
+    if ( ! q ) { out += c; i++; continue; }
+    let s = '', j = i + q.length, closed = false;
+    while ( j < text.length ) {
+      if ( text.substr(j, q.length) === q ) { closed = true; j += q.length; break; }
+      const d = text[j];
+      if ( d !== '\\' ) { s += d; j++; continue; }
+      if ( /^u[0-9a-fA-F]{4}$/.test(text.substr(j + 1, 5)) ) { s += String.fromCharCode(parseInt(text.substr(j + 2, 4), 16)); j += 6; continue; }
+      const e = text.charAt(j + 1);
+      s += ESC[e] || e;
+      j += 2;
+    }
+    if ( ! closed ) return out + text.slice(i);
+    out += JSON.stringify(s);
+    i = j;
+  }
+  return out;
+}
+// FOAM reads a row without its last character (entry.subSequence(2, length - 1),
+// foam3 F3FileJournal.js:161): when that is the object's closing }, the row is lost.
 function parseRow(text) {
-  const body = text.slice(2).replace(/"""([\s\S]*?)"""/g, (m, t) => JSON.stringify(t));
+  const body = text.slice(2);
   const end = objectEnd(body);
-  if ( end === -1 ) return { row: undefined, rest: '' };
+  if ( end === -1 || end === body.length - 1 ) return { row: undefined, rest: '' };
   const obj = body.slice(0, end + 1), tail = body.slice(end + 1);
   // Nothing lost: the closing ), then at most a ; or , and a // comment (any text).
   const rest = /^\s*\)\s*[;,]?\s*(\/\/[\s\S]*)?$/.test(tail) ? '' : tail.replace(/\)\s*[;,]?\s*$/, '').trim();
   try { return { row: JSON.parse(obj), rest }; } catch (e) { /* not plain JSON: try JavaScript object syntax */ }
   SANDBOX = SANDBOX || vm.createContext(Object.create(null));
-  try { return { row: vm.runInContext('(' + obj + ')', SANDBOX, { timeout: 500 }), rest }; } catch (e) { return { row: undefined, rest }; }
+  try { return { row: vm.runInContext('(' + jsonStrings(obj) + ')', SANDBOX, { timeout: 500 }), rest }; } catch (e) { return { row: undefined, rest }; }
 }
 
 // A row with {name} placeholders that a setup script fills in before the journal is
