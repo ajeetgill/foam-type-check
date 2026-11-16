@@ -44,10 +44,29 @@ function parseRow(text) {
   const body = text.slice(2).replace(/"""([\s\S]*?)"""/g, (m, t) => JSON.stringify(t));
   const end = objectEnd(body);
   if ( end === -1 ) return { row: undefined, rest: '' };
-  const obj = body.slice(0, end + 1), rest = body.slice(end + 1).replace(/\s*\/\/[^"'`]*$/, '').replace(/\)\s*;?\s*$/, '').trim();
+  const obj = body.slice(0, end + 1), tail = body.slice(end + 1);
+  // Nothing lost: the closing ), then at most a ; or , and a // comment (any text).
+  const rest = /^\s*\)\s*[;,]?\s*(\/\/[\s\S]*)?$/.test(tail) ? '' : tail.replace(/\)\s*[;,]?\s*$/, '').trim();
   try { return { row: JSON.parse(obj), rest }; } catch (e) { /* not plain JSON: try JavaScript object syntax */ }
   SANDBOX = SANDBOX || vm.createContext(Object.create(null));
   try { return { row: vm.runInContext('(' + obj + ')', SANDBOX, { timeout: 500 }), rest }; } catch (e) { return { row: undefined, rest }; }
+}
+
+// A row with {name} placeholders that a setup script fills in before the journal is
+// read (foam3 tools/setup/adminUser.jrl: "id":{adminUserId}): it parses once each is a value.
+const isTemplateRow = t => /\{[A-Za-z_]\w*\}/.test(t) && !! parseRow(t.replace(/\{[A-Za-z_]\w*\}/g, '0')).row;
+
+// Whether FOAM would give this row an empty id, read from the class's id axiom without
+// creating an object (a create runs init, factories and assertions). A computed id
+// (expression, factory, getter) or a non-empty default counts as not empty.
+function hasEmptyId(cls, row) {
+  const ID = cls.ID;
+  if ( ID && Array.isArray(ID.propNames) ) return ID.propNames.every(n => ! ( n in row ));   // ids: [ 'a', 'b' ]
+  const prop = ID || cls.getAxiomByName('id');
+  if ( ! prop || ! prop.name || prop.name in row ) return false;
+  if ( prop.expression || prop.factory || prop.getter ) return false;
+  const v = prop.value;
+  return v === undefined || v === null || v === '' || v === 0;
 }
 
 // Class ids declared in source files, also those FOAM does not load in Node
@@ -112,7 +131,7 @@ function checkJournals({ foam, app, files }) {
             i++;
             if ( /^\s*\}\)\s*$/.test(lines[i]) ) break;
           }
-        } else add(file, lineNo, 'row does not parse', t.split('\n')[0].trim().slice(0, 60));
+        } else if ( ! isTemplateRow(t) ) add(file, lineNo, 'row does not parse', t.split('\n')[0].trim().slice(0, 60));
         continue;
       }
       if ( t[0] === 'r' ) continue;        // a remove names an id only
@@ -129,7 +148,7 @@ function checkJournals({ foam, app, files }) {
       let cls; try { cls = foam.lookup(cid, true); } catch (e) {}
       if ( ! cls ) {
         declared = declared || declaredClasses(app);
-        if ( ! declared.has(cid) ) add(file, lineNo, 'unknown class', cid);
+        if ( ! declared.has(cid) && ! /\{\w+\}/.test(cid) ) add(file, lineNo, 'unknown class', cid);   // {x}: a template's placeholder
         continue;
       }
       // Keys, also of nested objects that name their own class (FOAM drops those too).
@@ -155,13 +174,7 @@ function checkJournals({ foam, app, files }) {
       };
       checkKeys(row, cls, cid);
       if ( ! ('id' in row) ) {
-        // Ask FOAM: a class may compute its id from other properties.
-        let id;
-        try {
-          const args = Object.assign({}, row); delete args.class;
-          id = cls.create(args, foam.__context__).id;
-        } catch (e) { id = 'unknown'; }
-        if ( id === '' || id === 0 || id == null ) {
+        if ( hasEmptyId(cls, row) ) {
           if ( ! noId.has(cid) ) noId.set(cid, []);
           noId.get(cid).push(lineNo);
         }
@@ -173,4 +186,4 @@ function checkJournals({ foam, app, files }) {
   return found;
 }
 
-module.exports = { checkJournals };
+module.exports = { checkJournals, declaredClasses };

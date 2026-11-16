@@ -128,6 +128,19 @@ function generate_(opts, log) {
   }
   console.assert = realAssert; console.error = realError;
   const knownSet = new Set(known);
+  // A class a source file declares that this FOAM did not load (a test class, a
+  // Java-only class): its name is written as `any`, so code naming it is not an
+  // unknown name. Nothing about it is checked.
+  for ( const id of opts.declared || [] ) {
+    const parts = id.split('.');
+    if ( knownSet.has(id) || parts.length < 2 || ! parts.every(p => /^[A-Za-z_$][\w$]*$/.test(p)) ) continue;
+    let node = tree, taken = false;
+    for ( const p of parts.slice(0, -1) ) {
+      if ( node[p] && ( node[p].__cls || node[p].__any ) ) { taken = true; break; }
+      node = node[p] = node[p] || {};
+    }
+    if ( ! taken && ! node[parts[parts.length - 1]] ) node[parts[parts.length - 1]] = { __any: true };
+  }
 
   const q = s => JSON.stringify(s);
 
@@ -396,6 +409,7 @@ function generate_(opts, log) {
     for ( const key of Object.keys(node).sort() ) {
       const v = node[key];
       if ( v.__cls ) { out.push(...emitClass(key, v.__cls, ind)); continue; }
+      if ( v.__any ) { out.push(`${ind}const ${seg(key)}: any;`); continue; }
       out.push(`${ind}namespace ${seg(key)} {`, ...emit(v, ind + '  ', obj && Object.getOwnPropertyDescriptor(obj, key) && Object.getOwnPropertyDescriptor(obj, key).value), `${ind}}`);
     }
     return out;
@@ -603,7 +617,9 @@ if ( CLI ) {
     out: path.resolve(__dirname, process.env.FOAM_DTS_OUT || 'foam.d.ts'),
     style: process.env.FOAM_STYLE, report: process.env.FOAM_REPORT,
     level: process.env.FOAM_LEVEL || 'strict', log: console.log,
-    app: process.env.FOAM_APP, journals: readList(process.env.FOAM_JOURNALS)
+    app: process.env.FOAM_APP, journals: readList(process.env.FOAM_JOURNALS),
+    // Classes the app's files declare, loaded or not (tests): unloaded ones are named as `any`.
+    declared: [...require('./journals').declaredClasses(path.resolve(process.env.FOAM_APP))]
   });
   // Browser-only classes start async work that fails in Node. The file is written, so stop here.
   process.exit(0);
