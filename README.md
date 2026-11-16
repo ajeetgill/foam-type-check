@@ -333,6 +333,22 @@ types file in about half a second, and the hook uses that file.
 - `"lspWait"` in the config: how long the hook waits for the LSP, in milliseconds (default 4000).
 - The plugin keeps its own copy of the checks for when no LSP runs. `node test/parity.js <app> <FOAM-LSP folder>` runs both on one app and lists every problem only one of them reports. Run it after changing a check in either repo.
 
+## Cleaning up old code: the migrator agent
+
+The plugin ships an agent, `ftypechecks-migrator` (Sonnet), that fixes what the
+check reports in existing code: real fixes only, no silencing, then a shorter
+starting list. Ask Claude to "clean up the FTypechecks problems in <folder>".
+
+- With no batch named, it plans first: problems by kind, files in batches, and
+  the question "batches or one go?". It edits nothing in that run.
+- Each batch: fixes, tests by name, `--baseline`, a commit (never a push), and a
+  short report: before and after counts, real bugs found, checker gaps, screens
+  to click through.
+- On Footnote: 219 problems in 12 files in 10.5 minutes, tests green.
+
+A branch made before `foam-check.config.json` existed never ran the hook. After
+merging one, run `--report`: problems it brought in show there.
+
 ## Undeclared fields
 
 Code sometimes sets a field that the class never declares:

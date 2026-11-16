@@ -45,6 +45,12 @@ const STYLE = [
     id: 'undeclared field', member: 'field',
     group: 'undeclared fields', one: 'undeclared field',
     fix: "The code sets this on a FOAM object, but the class does not declare it. Declare it in properties, for example { class: 'Boolean', name: 'x' }."
+  },
+  {
+    // Same, on a plain JavaScript or browser object (an Error, an Element): not a FOAM class.
+    id: 'field on a plain object', member: 'field',
+    group: 'fields added to plain objects', one: 'field added to a plain object',
+    fix: 'This is not a FOAM object, so there is no class to declare it in. Say the type where the object is made: /** @type {Error & { data?: any }} */ (new Error(...)).'
   }
 ].map(r => ({ ...r, kind: 'style' }));
 
@@ -86,6 +92,13 @@ const CLEANUP = [
   [/^TS2538$/, /./, 'Use a string or a number as the key.'],
   [/^TS2810$/, /./, 'Write: /** @type {Promise<void>} */ (new Promise(...)), or call resolve with a value.']
 ];
+// TypeScript errors that are limits of TypeScript, not problems in the code. Never reported.
+const NOT_REPORTED = [
+  [/^TS(2580|2591)$/, /./],                                   // a Node name (require, assert) in a file with no Node types
+  [/^TS2704$/, /./],                                          // delete of a property TypeScript thinks is read-only
+  [/^TS2367$/, /types '(["'`]).*\1' and '(["'`]).*\2' have no overlap/]   // two literals: narrowing that ignores a change made by a call
+];
+const notReported = (code, msg) => NOT_REPORTED.some(([c, m]) => c.test(code) && m.test(msg));
 const cleanupFix = (code, msg) => { const c = CLEANUP.find(c => c[0].test(code) && c[1].test(msg)); return c ? c[2] : undefined; };
 
-module.exports = { RULES, STYLE, TS, cleanupFix };
+module.exports = { RULES, STYLE, TS, cleanupFix, notReported };

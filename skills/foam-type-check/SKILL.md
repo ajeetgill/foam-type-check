@@ -131,6 +131,10 @@ Problems are grouped by file. Each has a plain-language title.
   project wants cleaner (level `strict`, the default). Apply the fix. Do not silence it.
 - `N undeclared fields: x (on Y)`: the code sets a field that class Y does not
   declare. Declare it in `properties`.
+- `N fields added to plain objects: x (on Error)`: the object is plain JavaScript
+  or a browser object, not FOAM. Say its type where it is made, with a JSDoc cast.
+- `foam.lookup('x.Y')` and `foam.maybeLookup('x.Y')` give class `x.Y`, so
+  `Y.isInstance(o)` narrows `o`. A property of type Expr can hold a Property.
 - `N older problems on the starting list are not shown`: not an error. Old code
   that is still to be converted.
 - `Only the edited file was checked`: on a big app the hook checks one file, to
@@ -141,6 +145,12 @@ A new method or property is known to the check only after the types are
 regenerated. The check does that itself on every run.
 
 ## What it does not check
+
+Not reported, as limits of TypeScript rather than problems in the code: a Node
+name (`require`, `assert`) in a file with no Node types, `delete` of a property
+TypeScript thinks is read-only, and a comparison of two string literals that a
+call in between could change (`location.hash` after `history.back()`).
+
 
 Null and undefined values, a missing argument, anything read from the context, relationship
 properties, `dynamic(...)` arguments, listener and action arguments, classes

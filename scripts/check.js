@@ -41,7 +41,7 @@
 //   4. scope       keep the target files' problems (the edited file, or this turn's files), then the new ones
 //   5. output      the mode prints: check, --report or --baseline
 const fs = require('fs'), path = require('path'), { spawnSync } = require('child_process');
-const { RULES, TS, cleanupFix } = require('./rules');
+const { RULES, TS, cleanupFix, notReported } = require('./rules');
 const T0 = Date.now();
 const time = what => { if ( process.env.FTYPECHECKS_TIMES ) console.error(`${what}: ${Date.now() - T0} ms`); };
 
@@ -268,6 +268,14 @@ const MODEL = /foam\s*\.\s*(CLASS|ENUM|INTERFACE|RELATIONSHIP|SCRIPT|LIB)\s*\(/;
 const madeUp = t => t !== '(...args: any[]) => any' &&
   ( /^[{(\[]/.test(t) || / \| [{(]/.test(t) || /^typeof /.test(t) || /[})]\[\]$/.test(t) );
 
+// A JavaScript or browser type (Error, DOMRect, Element & { x: any }), not a FOAM class:
+// app.d.ts declares an interface for every FOAM class, by its short name.
+let FOAM_NAMES = null;
+const plainObject = t => {
+  FOAM_NAMES = FOAM_NAMES || new Set([...readText(inWork('app.d.ts')).matchAll(/^\s*interface (\w+) extends /gm)].map(m => m[1]));
+  return / & /.test(t) || ! FOAM_NAMES.has(t.replace(/<.*$/, ''));
+};
+
 function typeProblems() {
   const rel = p => path.relative(cfg.work, p).split(path.sep).join('/');
   const tsconfig = targets ? 'tsconfig.hook.json' : 'tsconfig.json';
@@ -312,6 +320,7 @@ function typeProblems() {
     const [, where, line, /* column */, code, msg] = m, abs = path.resolve(cfg.work, where), file = relApp(abs);
     // A plain script with no FOAM model in it (a Node runner, a helper) is not checked.
     if ( ! MODEL.test(sourceText(abs)) ) continue;
+    if ( notReported(code, msg) ) continue;
     if ( levelOf(abs) === 'foam' ) {
       if ( ! TS[code] ) continue;
       // Wrong type, where the wanted type was made up from plain JavaScript.
@@ -328,7 +337,7 @@ function typeProblems() {
       // That is a style point, not a wrong name. One line per field, however often it is used.
       if ( new RegExp('\\.' + un[1].replace(/[$]/g, '\\$&') + '\\s*=(?!=)').test(sourceText(abs)) ) {
         const key = `field|${file}|${un[2]}.${un[1]}`;
-        if ( ! out.some(p => p.key === key) ) out.push(problem('undeclared field', { file, member: `${un[1]} (on ${un[2]})`, key }));
+        if ( ! out.some(p => p.key === key) ) out.push(problem(plainObject(un[2]) ? 'field on a plain object' : 'undeclared field', { file, member: `${un[1]} (on ${un[2]})`, key }));
         continue;
       }
     }

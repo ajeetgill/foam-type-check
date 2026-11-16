@@ -2,7 +2,8 @@
 /**
  * Parity: the plugin's own checks (used when no FOAM LSP is running) and the
  * FOAM LSP's checks must report the same problems. Each lives in its own repo,
- * so this runs both on one app and compares their report.json:
+ * so this compares the two types generators' text, then runs both on one app and
+ * compares their report.json:
  *   - style:   class.member + rule
  *   - journal: file + line + rule
  *
@@ -20,6 +21,18 @@ const app = path.resolve(appArg), lspDir = path.resolve(lspArg);
 const check = path.join(__dirname, '..', 'scripts', 'check.js');
 const work = path.join(app, '.foam-check');
 const fail = msg => { console.error('parity: ' + msg); process.exit(2); };
+
+// 0. The types generator exists in both repos (scripts/gen-types.js, src/TypesFile.js):
+//    the part that writes the types must be the same text.
+const body = f => { const t = fs.readFileSync(f, 'utf8'); const i = t.indexOf('function generate_('); return i < 0 ? null : t.slice(i, t.indexOf('log(`wrote', i)); };
+const genPlugin = body(path.join(__dirname, '..', 'scripts', 'gen-types.js')), genLsp = body(path.join(lspDir, 'src', 'TypesFile.js'));
+if ( ! genPlugin || ! genLsp ) fail('could not find generate_ in both generators');
+const genSame = genPlugin === genLsp;
+if ( ! genSame ) {
+  const a = genPlugin.split('\n'), b = genLsp.split('\n');
+  const i = a.findIndex((l, k) => l !== b[k]);
+  console.log(`generator: differs, first at line ${i + 1} of generate_:\n  plugin: ${a[i]}\n  LSP:    ${b[i]}`);
+} else console.log('generator: the same');
 
 // 1. The plugin, loading FOAM itself. --report checks every source file and journal.
 const cli = spawnSync(process.execPath, [check, '--report'], { cwd: app, encoding: 'utf8', env: { ...process.env, FTYPECHECKS_NO_LSP: '1' }, maxBuffer: 64 * 1024 * 1024 });
@@ -49,7 +62,7 @@ function compare(fromLsp) {
     style:   r => (r.style || []).map(s => `${s.cls}.${s.member} | ${s.rule}`),
     journal: r => (r.journal || []).map(j => `${rel(j.file)}:${j.line} | ${j.rule}`)
   };
-  let differ = 0;
+  let differ = genSame ? 0 : 1;
   for ( const [name, of] of Object.entries(sets) ) {
     const a = new Set(of(plugin)), b = new Set(of(fromLsp));
     const onlyPlugin = [...a].filter(k => ! b.has(k)).sort(), onlyLsp = [...b].filter(k => ! a.has(k)).sort();
