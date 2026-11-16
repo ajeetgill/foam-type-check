@@ -4,6 +4,9 @@
 //   node check.js [app dir]             check; fails on problems (new ones only, if there is a starting list)
 //   node check.js [app dir] --report    conversion report: what is left to convert, per file
 //   node check.js [app dir] --baseline  write the starting list: accept today's problems, fail only on new ones
+//   node check.js [app dir] --baseline-files <file>...
+//                                       shrink the starting list for these files only: drop the problems
+//                                       they no longer have; never add one, never touch other files
 //   node check.js [app dir] --all       check and ignore the starting list
 //   node check.js [app dir] --editor    write jsconfig.json in the app, so VS Code (and other editors
 //                                       that use TypeScript) know the FOAM types while you type
@@ -39,15 +42,19 @@
 //   2. types       the first type provider that can answer writes app.d.ts and report.json
 //   3. problems    every problem source turns its findings into problems (rules.js names them)
 //   4. scope       keep the target files' problems (the edited file, or this turn's files), then the new ones
-//   5. output      the mode prints: check, --report or --baseline
+//   5. output      the mode prints: check, --report, --baseline or --baseline-files
 const fs = require('fs'), path = require('path'), { spawnSync } = require('child_process');
 const { RULES, TS, cleanupFix, notReported } = require('./rules');
 const T0 = Date.now();
 const time = what => { if ( process.env.FTYPECHECKS_TIMES ) console.error(`${what}: ${Date.now() - T0} ms`); };
 
 const CONFIG = 'foam-check.config.json', BASELINE = 'foam-check.baseline.json';
-const OPTIONS = ['--hook', '--stop', '--report', '--baseline', '--all', '--editor'];
-const flags = new Set(process.argv.slice(2).filter(a => a.startsWith('--')));
+const OPTIONS = ['--hook', '--stop', '--report', '--baseline', '--baseline-files', '--all', '--editor'];
+const ARGS = process.argv.slice(2), flags = new Set(ARGS.filter(a => a.startsWith('--')));
+// Words after --baseline-files are its files; the app dir comes before it.
+const filesAt = ARGS.indexOf('--baseline-files');
+const batchArgs = filesAt < 0 ? [] : ARGS.slice(filesAt + 1).filter(a => ! a.startsWith('--'));
+const appArg = (filesAt < 0 ? ARGS : ARGS.slice(0, filesAt)).find(a => ! a.startsWith('--'));
 for ( const f of flags ) if ( ! OPTIONS.includes(f) ) { console.error(`Unknown option ${f}. Options: ${OPTIONS.join(' ')}`); process.exit(1); }
 const hook = flags.has('--hook'), stopHook = flags.has('--stop');
 const asHook = hook || stopHook;          // run by Claude Code: talk on stderr, exit 2 on problems
@@ -93,7 +100,7 @@ const stop = text => {
 
 function settings() {
   const start = hook ? path.dirname(edited) : stopHook ? (input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd()) :
-    (process.argv.slice(2).find(a => ! a.startsWith('--')) || process.cwd());
+    (appArg || process.cwd());
   const file = findUp(start, CONFIG) || (asHook && process.env.CLAUDE_PROJECT_DIR && findUp(process.env.CLAUDE_PROJECT_DIR, CONFIG));
   if ( ! file ) {
     if ( asHook ) process.exit(0);        // not a project that uses this check
@@ -133,6 +140,19 @@ const inSources = f => cfg.dirs.some(d => f.startsWith(d + path.sep));
 const checked = f => f.endsWith('.jrl') ? cfg.journals.includes(f) : inSources(f);
 fs.mkdirSync(cfg.work, { recursive: true });
 const relApp = f => f ? path.relative(cfg.app, path.resolve(cfg.app, f)).split(path.sep).join('/') : '(no file)';
+const baseFile = path.join(cfg.base, BASELINE);
+// --baseline-files: check the files and the list before the slow part.
+const batch = batchArgs.map(a => {
+  let f = [path.resolve(a), path.resolve(cfg.app, a)].find(f => fs.existsSync(f));
+  if ( ! f ) stop(`${a}: no such file (looked in ${process.cwd()} and ${cfg.app}).`);
+  f = path.join(cfg.app, path.relative(fs.realpathSync(cfg.app), fs.realpathSync(f)));   // same spelling as cfg.app (links, /private/var)
+  if ( ! checked(f) ) stop(`${a}: not a file the check covers (the "sources" folders or the journals of ${cfg.app}).`);
+  return relApp(f);
+});
+if ( flags.has('--baseline-files') ) {
+  if ( ! batch.length ) stop('Give the files after --baseline-files, for example: --baseline-files src/com/x/Foo.js');
+  if ( ! fs.existsSync(baseFile) ) stop(`No starting list: ${baseFile} does not exist. Write one first with --baseline.`);
+}
 const inWork = name => path.join(cfg.work, name);
 
 // Batch mode: the files edited this turn wait in pending.json for the Stop hook.
@@ -378,10 +398,9 @@ if ( users.length ) {
 }
 
 const count = list => list.reduce((m, p) => (m[p.key] = (m[p.key] || 0) + 1, m), {});
-const baseFile = path.join(cfg.base, BASELINE);
 const now = count(problems);
 let listed = {}, hasBase = false;
-if ( ! flags.has('--all') && ! flags.has('--report') && ! flags.has('--baseline') && fs.existsSync(baseFile) ) {
+if ( ! flags.has('--all') && ! flags.has('--report') && ! flags.has('--baseline') && ! flags.has('--baseline-files') && fs.existsSync(baseFile) ) {
   try { listed = JSON.parse(fs.readFileSync(baseFile, 'utf8')).problems || {}; hasBase = true; }
   catch (e) { stop(`${baseFile} is not valid JSON: ${e.message}`); }
 }
@@ -436,8 +455,51 @@ const MODES = {
     console.log(`${bold('Starting list written')}: ${plural(problems.length, 'problem')} accepted.\n` +
       `File: ${baseFile}\n` +
       `From now on the check fails only on new problems.\n` +
-      `Commit this file. Run --baseline again after you convert code, to shrink the list.`);
+      `Commit this file. After you convert files, run --baseline-files <those files> to shrink the list.`);
     process.exit(0);
+  },
+
+  // Shrink the starting list for the given files only. A key of those files stays at most
+  // as often as it is listed and as it is found now; a key not on the list is never added
+  // (a new problem stays reported); every other file's keys stay as they are.
+  baselineFiles() {
+    let list; try { list = JSON.parse(fs.readFileSync(baseFile, 'utf8')); } catch (e) { stop(`${baseFile} is not valid JSON: ${e.message}`); }
+    const old = list.problems || {};
+    const mine = new Set(batch);
+    // The file of a key. Problems found now say it. A key not found now: type, field and
+    // journal keys hold the file; style and FOAM keys hold a class id, found in report.json.
+    const classFile = {};
+    for ( const [id, s] of Object.entries(report.shapes || {}) ) classFile[id] = relApp(s.file);
+    for ( const s of report.style ) if ( s.file ) classFile[s.cls] = relApp(s.file);
+    for ( const a of report.asserts ) if ( a.file ) classFile[a.where] = relApp(a.file);
+    const fileNow = {};
+    for ( const p of problems ) fileNow[p.key] = p.file;
+    const fileOf = key => {
+      if ( fileNow[key] ) return fileNow[key];
+      const [kind, where] = key.split('|');
+      if ( kind === 'type' || kind === 'field' || kind === 'journal' ) return where;
+      if ( kind === 'style' ) return classFile[where.slice(0, where.lastIndexOf('.'))];
+      if ( kind === 'foam' ) return where.includes('/') ? relApp(where) : classFile[where];
+    };
+    const kept = {}, removed = Object.fromEntries(batch.map(f => [f, 0]));
+    for ( const k of Object.keys(old) ) {
+      const f = fileOf(k);
+      if ( ! mine.has(f) ) { kept[k] = old[k]; continue; }
+      const n = Math.min(old[k], now[k] || 0);
+      if ( n ) kept[k] = n;
+      removed[f] += old[k] - n;
+    }
+    // In the batch's files, more of a kind now than on the list: new, not added.
+    const added = problems.filter(p => mine.has(p.file) && now[p.key] > (old[p.key] || 0));
+    const sorted = Object.fromEntries(Object.keys(kept).sort().map(k => [k, kept[k]]));
+    const total = Object.values(sorted).reduce((a, b) => a + b, 0);
+    fs.writeFileSync(baseFile, JSON.stringify({ ...list, total, problems: sorted }, null, 2) + '\n');
+    const all = Object.values(removed).reduce((a, b) => a + b, 0);
+    const out = [`${bold('Starting list updated')} for ${plural(batch.length, 'file')}: ${plural(all, 'problem')} removed. Other files not changed.`,
+      `File: ${baseFile}`, '', ...batch.map(f => `  ${f}: ${removed[f]} removed`)];
+    if ( added.length ) out.push('', red(bold(`${plural(added.length, 'new problem')} in these files, not added to the list. Fix ${added.length === 1 ? 'it' : 'them'}:`)), '', show(added));
+    console.log(out.join('\n'));
+    process.exit(added.length ? 1 : 0);
   },
 
   report() {
@@ -473,7 +535,7 @@ const MODES = {
       (moreUsers ? `. ${moreUsers} more not checked: run the full check.` : ''));
     if ( targets ) notes.push(`Only ${targets.length === 1 ? 'the edited file was' : `the ${targets.length} edited files were`} checked. Run the full check before you finish: node check.js`);
     if ( hasBase && older && ! targets ) notes.push(`${plural(older, 'older problem')} on the starting list ${older === 1 ? 'is' : 'are'} not shown. See them with --all.`);
-    if ( hasBase && fixed ) notes.push(`${plural(fixed, 'problem')} from the starting list ${fixed === 1 ? 'is' : 'are'} fixed. Run --baseline to shrink the list.`);
+    if ( hasBase && fixed ) notes.push(`${plural(fixed, 'problem')} from the starting list ${fixed === 1 ? 'is' : 'are'} fixed. Run --baseline-files <files> to shrink the list.`);
     if ( ! fresh.length ) {
       if ( stopHook ) { try { fs.unlinkSync(PENDING); fs.unlinkSync(inWork('stop-last.json')); } catch (e) {} }
       if ( asHook ) process.exit(0);
@@ -496,4 +558,4 @@ const MODES = {
     process.exit(1);
   }
 };
-MODES[flags.has('--editor') ? 'editor' : flags.has('--baseline') ? 'baseline' : flags.has('--report') ? 'report' : 'check']();
+MODES[flags.has('--editor') ? 'editor' : flags.has('--baseline-files') ? 'baselineFiles' : flags.has('--baseline') ? 'baseline' : flags.has('--report') ? 'report' : 'check']();

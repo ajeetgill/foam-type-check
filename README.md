@@ -91,6 +91,7 @@ Run from the app folder, or give the app folder as the first argument.
 | `node scripts/check.js` | Check. Exit code 0: no problems. Exit code 1: problems, printed. |
 | `node scripts/check.js --report` | Conversion report: what is left to convert, per file. |
 | `node scripts/check.js --baseline` | Write the starting list: accept today's problems. |
+| `node scripts/check.js --baseline-files <file> ...` | Shrink the starting list for these files only. Never adds a problem. |
 | `node scripts/check.js --all` | Check and ignore the starting list. |
 | `node scripts/check.js --editor` | Write `jsconfig.json` in the app, so VS Code knows the FOAM types while you type. |
 
@@ -250,9 +251,18 @@ Pick a file from the report. Convert it. Run the check. Then:
 
     FTypechecks: 0 new problems (com.foamdev.cook)
     26 older problems on the starting list are not shown. See them with --all.
-    6 problems from the starting list are fixed. Run --baseline to shrink the list.
+    6 problems from the starting list are fixed. Run --baseline-files <files> to shrink the list.
 
-Run `--baseline` again. The list only gets shorter. A problem that comes back is reported as new.
+Shrink the list for the files you converted:
+
+    node scripts/check.js --baseline-files src/com/foamdev/cook/RecipeCreateView.js
+
+It removes the problems those files no longer have. It never adds one, and it
+does not touch other files. A new problem in those files is printed, not added,
+and the exit code is 1. A problem that comes back is reported as new.
+
+Plain `--baseline` rewrites the whole list: it also accepts new problems that
+other work left on the branch. Use it for the first list only.
 
 ### Step 4. Finish
 
@@ -331,6 +341,7 @@ types file in about half a second, and the hook uses that file.
 - Nothing to set up in the plugin. The LSP finds `foam-check.config.json` at the workspace root.
 - No LSP running: the hook loads FOAM itself, as before.
 - `"lspWait"` in the config: how long the hook waits for the LSP, in milliseconds (default 4000).
+- `node test/baseline-files.js <foam3 folder>` tests `--baseline-files` on a small app in a temp folder.
 - The plugin keeps its own copy of the checks for when no LSP runs. `node test/parity.js <app> <FOAM-LSP folder>` runs both on one app and lists every problem only one of them reports. Run it after changing a check in either repo.
 
 ## Cleaning up old code: the migrator agent
@@ -341,7 +352,7 @@ starting list. Ask Claude to "clean up the FTypechecks problems in <folder>".
 
 - With no batch named, it plans first: problems by kind, files in batches, and
   the question "batches or one go?". It edits nothing in that run.
-- Each batch: fixes, tests by name, `--baseline`, a commit (never a push), and a
+- Each batch: fixes, tests by name, `--baseline-files` with the batch's files, a commit (never a push), and a
   short report: before and after counts, real bugs found, checker gaps, screens
   to click through.
 - On Footnote: 219 problems in 12 files in 10.5 minutes, tests green.

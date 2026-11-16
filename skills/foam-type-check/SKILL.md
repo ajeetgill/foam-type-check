@@ -18,6 +18,8 @@ around it.
     node "${CLAUDE_PLUGIN_ROOT}/scripts/check.js" <app folder>             check
     node "${CLAUDE_PLUGIN_ROOT}/scripts/check.js" <app folder> --report    what is left to convert, per file
     node "${CLAUDE_PLUGIN_ROOT}/scripts/check.js" <app folder> --baseline  accept today's problems (starting list)
+    node "${CLAUDE_PLUGIN_ROOT}/scripts/check.js" <app folder> --baseline-files <file> ...
+                                                                           shrink the starting list for these files only
     node "${CLAUDE_PLUGIN_ROOT}/scripts/check.js" <app folder> --all       check, ignoring the starting list
     node "${CLAUDE_PLUGIN_ROOT}/scripts/check.js" <app folder> --editor    write jsconfig.json: FOAM types in VS Code
 
@@ -85,10 +87,14 @@ Old code does not follow the rules. Do not try to fix everything in one edit.
    fail only on new ones.
 3. Convert one file at a time. Run the check after each file.
 4. When the check says problems from the starting list are fixed, run
-   `--baseline` again. The list only gets shorter.
+   `--baseline-files` with the files you converted. It removes their fixed
+   problems from the list. It never adds a problem, and never touches other
+   files. A new problem in those files is printed, not added: fix it.
+   Plain `--baseline` rewrites the whole list, so it also accepts new problems
+   from other work. Use it only for the first list.
 5. When `--report` shows 0 problems, tell the user the starting list can be deleted.
 
-Never run `--baseline` to make a new problem go away. Fix the problem.
+Never run `--baseline` or `--baseline-files` to make a new problem go away. Fix the problem.
 
 Order that works inside a file: imports (rule 3), then methods (rule 2), then
 DAO imports (rule 4), then properties (rule 1).

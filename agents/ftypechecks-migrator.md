@@ -60,8 +60,8 @@ Property classes change behaviour. Before you give a property a class, read ever
   `toString` and `constructor`, and writes bad args lines.
 
 Never:
-- `// @ts-ignore`, `// @ts-nocheck`, `// ftypechecks: off`, casts to `any` or `unknown`, or `--baseline` before
-  the fixes. Never run a bulk replace twice (it makes `{ name: { name: ... } }`).
+- `// @ts-ignore`, `// @ts-nocheck`, `// ftypechecks: off`, casts to `any` or `unknown`, or `--baseline` or
+  `--baseline-files` before the fixes. Never run a bulk replace twice (it makes `{ name: { name: ... } }`).
 - A behaviour change that is not a bug fix. An `async function` moved to object form keeps `async: true`.
 - A fixed wait in a test (`await wait(60)`). Use the project's wait-for-condition helper.
 - `git stash`: the stash is shared by every worktree and session. To compare with the old code, use
@@ -73,7 +73,8 @@ Never:
 
 Valid code the checker cannot follow is a gap, not a bug. If the only fix makes the code harder to read, leave the
 code and list it. If you keep a fix that only works around the checker, list it too.
-Known gaps (plugin 0.7.4): test classes are not in the types (use `foam.lookup('x.test.Y')` and list it); mixed-shape array literals get a too-narrow type; two `var`s of
+Known gaps (plugin 0.7.5): a test class the app does not load is in the types as `any`: naming it works, but its
+members and arguments are not checked; mixed-shape array literals get a too-narrow type; two `var`s of
 one name in one function are reported (rename one: the project wants one type per variable); a journal key of a
 class with `flags: ['java']` is reported as unknown because the class is not in the JS types (check the Java
 side before you remove the key).
@@ -90,10 +91,12 @@ Mark each gap: false alarm, missed problem, or bad wording, with file:line and t
 ## 5. Finish
 
 - `check.js <app> --all` once more: the batch's files show only the gaps you listed.
-- `check.js <app> --baseline`, so the starting list shrinks. Commit it with the fixes.
-- Then `git diff` the starting list: it may only lose keys, and only keys of the batch's files. `--baseline`
-  rewrites the whole list, so it also takes in problems other work left behind. If the diff adds a key or
-  touches another file, undo those lines by hand and name them in the report.
+- `check.js <app> --baseline-files <file> <file> ...` with the batch's files, so the starting list shrinks.
+  It only removes keys of those files that are gone. It never adds a key and never touches another file.
+  Commit the list with the fixes.
+- It names any new problem in those files that it did not add (exit code 1). Fix it, or list it as a gap.
+- Never use plain `--baseline` here: it rewrites the whole list, so it also takes in problems other work left
+  behind.
 - Commit with explicit paths (never `git add -A`, never stage foam3). Do not push or merge.
 
 ## 6. Report (short, plain)
