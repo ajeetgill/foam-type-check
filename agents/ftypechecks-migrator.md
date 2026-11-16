@@ -44,6 +44,21 @@ Real fixes only:
   a class. If you cannot tell, leave it and list it under "unsure".
 - A real bug the check shows: fix it and name it in the report.
 
+Property classes change behaviour. Before you give a property a class, read every test of it:
+- `Array` and `FObjectArray` have a built-in empty-array factory that wins over an `expression`: the property
+  stays empty. Never put them on a property that has an `expression`.
+- `Function` defaults to an empty function, which is truthy, and refuses null: `if ( this.fn_ )` flips. Use
+  `value: null`, and `clearProperty` to unset it.
+- `Long` and `Int` turn null into 0; `String` turns it into `''`. Look for `=== null`, `== null` and truthy tests.
+- `FObjectProperty` makes a new instance from a plain object: identity tests (`===`) against the object passed
+  in fail, and a test stand-in such as `{ name: 'picker' }` can be refused.
+- A class that is also built for Java: a typed import of a class with no Java side breaks javac. Add
+  `javaType: 'null'` to the import, and build the Java once before you finish.
+- `HTMLElement` as an argument type is checked no better than `Object` (`root.zork` passes). Count it as
+  "typed loosely".
+- A helper script that maps names must use a `Map` or `Object.create(null)`: a plain object also answers for
+  `toString` and `constructor`, and writes bad args lines.
+
 Never:
 - `// @ts-ignore`, `// @ts-nocheck`, `// ftypechecks: off`, casts to `any` or `unknown`, or `--baseline` before
   the fixes. Never run a bulk replace twice (it makes `{ name: { name: ... } }`).
@@ -58,8 +73,10 @@ Never:
 
 Valid code the checker cannot follow is a gap, not a bug. If the only fix makes the code harder to read, leave the
 code and list it. If you keep a fix that only works around the checker, list it too.
-Known gaps (plugin 0.7.2): test classes are not in the types (use `foam.lookup('x.test.Y')` and list it); mixed-shape array literals get a too-narrow type; two `var`s of
-one name in one function are reported (rename one: the project wants one type per variable).
+Known gaps (plugin 0.7.4): test classes are not in the types (use `foam.lookup('x.test.Y')` and list it); mixed-shape array literals get a too-narrow type; two `var`s of
+one name in one function are reported (rename one: the project wants one type per variable); a journal key of a
+class with `flags: ['java']` is reported as unknown because the class is not in the JS types (check the Java
+side before you remove the key).
 Mark each gap: false alarm, missed problem, or bad wording, with file:line and the message.
 
 ## 4. Tests
@@ -74,6 +91,9 @@ Mark each gap: false alarm, missed problem, or bad wording, with file:line and t
 
 - `check.js <app> --all` once more: the batch's files show only the gaps you listed.
 - `check.js <app> --baseline`, so the starting list shrinks. Commit it with the fixes.
+- Then `git diff` the starting list: it may only lose keys, and only keys of the batch's files. `--baseline`
+  rewrites the whole list, so it also takes in problems other work left behind. If the diff adds a key or
+  touches another file, undo those lines by hand and name them in the report.
 - Commit with explicit paths (never `git add -A`, never stage foam3). Do not push or merge.
 
 ## 6. Report (short, plain)
