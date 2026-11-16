@@ -92,9 +92,34 @@ if ( hook ) {
   edited = path.resolve(edited);
 }
 
+// The Stop hook logs each run to the app's harness log: one JSON line in
+// <git common dir>/harness/events.jsonl, only when that folder is there (an app that keeps
+// such a log). Never creates it; never fails or slows the hook (no output on failure).
+let configFile = null, logFiles = [];      // set once known; the log needs them
+function logRun(result, list, note) {
+  if ( ! stopHook || ! configFile ) return;
+  try {
+    const git = (...a) => { const r = spawnSync('git', a, { cwd: path.dirname(configFile), encoding: 'utf8', timeout: 1000 }); return r.status === 0 ? r.stdout.trim() : ''; };
+    const common = git('rev-parse', '--path-format=absolute', '--git-common-dir');
+    const dir = common && path.join(common, 'harness'), file = dir && path.join(dir, 'events.jsonl');
+    if ( ! dir || ! ( fs.existsSync(file) || ( fs.existsSync(dir) && fs.statSync(dir).isDirectory() ) ) ) return;
+    const rules = {};
+    for ( const p of list ) { const k = p.rule === 'type error' && /\((TS\d+)\)$/.test(p.title) ? `type error ${p.title.match(/\((TS\d+)\)$/)[1]}` : p.rule; rules[k] = (rules[k] || 0) + 1; }
+    const where = f => path.relative(path.dirname(configFile), f).split(path.sep).join('/');
+    const detail = [...(note ? [note] : []), `files: ${logFiles.map(where).join(', ')}`,
+      ...list.map(p => `${p.file}${p.line ? ':' + p.line : ''}: ${p.title}${p.member ? ': ' + p.member : ''}${p.detail ? ': ' + p.detail.split('\n')[0] : ''}`)].join('\n');
+    const top = git('rev-parse', '--show-toplevel');
+    const event = { ts: new Date().toISOString().replace(/\.\d+Z$/, 'Z'), hook: 'ftypechecks', result, worktree: path.basename(top || path.dirname(configFile)),
+      branch: git('branch', '--show-current'), head: git('rev-parse', '--short', 'HEAD'),
+      session: input.session_id || process.env.CLAUDE_SESSION_ID || '', rules, detail: detail.slice(0, 2000) };
+    fs.appendFileSync(file, JSON.stringify(event) + '\n');
+  } catch (e) { /* the log never fails the hook */ }
+}
+
 // A failure of the tool itself (not a problem in the code).
 const stop = text => {
   console.error(hook ? `FTypechecks could not run after editing ${edited}.\n${text}` : stopHook ? `FTypechecks could not run the end-of-turn check.\n${text}` : text);
+  logRun('blocked', [], `could not run: ${text}`);
   process.exit(asHook ? 2 : 1);
 };
 
@@ -106,6 +131,7 @@ function settings() {
     if ( asHook ) process.exit(0);        // not a project that uses this check
     stop(`No ${CONFIG} found in ${path.resolve(start)} or above it.`);
   }
+  configFile = file;
   let c;
   try { c = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { stop(`${file} is not valid JSON: ${e.message}`); }
   if ( typeof c.package !== 'string' || ! Array.isArray(c.sources) || ! c.sources.length )
@@ -165,7 +191,8 @@ if ( hook && cfg.hook === 'batch' ) {
   process.exit(0);
 }
 const pending = stopHook ? readPending().filter(checked) : [];
-if ( stopHook && ! pending.length ) process.exit(0);    // nothing edited, or not batch mode
+if ( stopHook && ! pending.length ) process.exit(0);    // nothing edited, or not batch mode: nothing checked, nothing logged
+logFiles = pending;
 for ( const need of ['foam3/src/foam_node.js', 'pom.js'] )
   if ( ! fs.existsSync(path.join(cfg.app, need)) ) stop(`${path.join(cfg.app, need)} not found. Check "app" in ${cfg.file}.`);
 
@@ -340,7 +367,7 @@ function typeProblems() {
     const [, where, line, /* column */, code, msg] = m, abs = path.resolve(cfg.work, where), file = relApp(abs);
     // A plain script with no FOAM model in it (a Node runner, a helper) is not checked.
     if ( ! MODEL.test(sourceText(abs)) ) continue;
-    if ( notReported(code, msg) ) continue;
+    if ( notReported(code, msg, file) ) continue;
     if ( levelOf(abs) === 'foam' ) {
       if ( ! TS[code] ) continue;
       // Wrong type, where the wanted type was made up from plain JavaScript.
@@ -537,7 +564,7 @@ const MODES = {
     if ( hasBase && older && ! targets ) notes.push(`${plural(older, 'older problem')} on the starting list ${older === 1 ? 'is' : 'are'} not shown. See them with --all.`);
     if ( hasBase && fixed ) notes.push(`${plural(fixed, 'problem')} from the starting list ${fixed === 1 ? 'is' : 'are'} fixed. Run --baseline-files <files> to shrink the list.`);
     if ( ! fresh.length ) {
-      if ( stopHook ) { try { fs.unlinkSync(PENDING); fs.unlinkSync(inWork('stop-last.json')); } catch (e) {} }
+      if ( stopHook ) { try { fs.unlinkSync(PENDING); fs.unlinkSync(inWork('stop-last.json')); } catch (e) {} logRun('pass', []); }
       if ( asHook ) process.exit(0);
       console.log(green(bold(`FTypechecks: 0 ${hasBase ? 'new ' : ''}problems`)) + ` (${cfg.package})` + (notes.length ? '\n' + notes.join('\n') : ''));
       process.exit(0);
@@ -549,8 +576,9 @@ const MODES = {
       // Claude already went on once because of this check, and the problems are the same:
       // let it stop, so the turn cannot loop. The files stay on the list for next time.
       const seen = fresh.map(p => p.key).sort().join('\n');
-      if ( input.stop_hook_active && readText(inWork('stop-last.json')) === seen ) process.exit(0);
+      if ( input.stop_hook_active && readText(inWork('stop-last.json')) === seen ) { logRun('pass', fresh, 'not blocked: the same problems blocked the last stop'); process.exit(0); }
       fs.writeFileSync(inWork('stop-last.json'), seen);
+      logRun('blocked', fresh);
       console.error(`You edited ${plural(targets.length, 'file')} this turn. Fix these before you finish.\n${text}`);
       process.exit(2);
     }

@@ -156,6 +156,8 @@ Not reported, as limits of TypeScript rather than problems in the code: a Node
 name (`require`, `assert`) in a file with no Node types, `delete` of a property
 TypeScript thinks is read-only, and a comparison of two string literals that a
 call in between could change (`location.hash` after `history.back()`).
+Also not reported, in test files only (a `test/` folder or `...Test.js`): `click()`
+on a plain `Element` from a DOM query. The test runs that line itself.
 
 
 Null and undefined values, a missing argument, anything read from the context, relationship
@@ -173,7 +175,10 @@ with `refines:` or with no package, Java, CSS.
   `// ftypechecks: foam` or `// ftypechecks: strict`. Do not add `off` to hide a
   problem. Fix the problem.
 - `"hook": "batch"`: the check runs once when you finish your turn, for every file
-  you edited. If it reports problems, fix them before you finish.
+  you edited. If it reports problems, fix them before you finish. If the app's git
+  folder has a `harness` folder, each run adds one line to `harness/events.jsonl`.
+- DAO topics are typed: `dao.on.put.sub(...)` works on an import of type
+  `foam.dao.DAO`. Do not change the import to `foam.dao.AbstractDAO` for that.
 
 0 problems means no wrong names and no wrong types in the checked parts. It does
 not mean the app works.

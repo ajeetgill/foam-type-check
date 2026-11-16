@@ -325,6 +325,14 @@ When Claude finishes its turn, one run checks every file edited in that turn
 same problems come back a second time, Claude may stop; the files stay on the
 list for the next turn.
 
+**Harness log.** If the app's repo has a folder `harness` in its git folder
+(`git rev-parse --git-common-dir`), each end-of-turn run adds one JSON line to
+`harness/events.jsonl` there: `ts, hook: "ftypechecks", result` (`pass` or
+`blocked`)`, worktree, branch, head, session, rules` (count per rule)`, detail`
+(the files and the first findings, at most 2,000 characters). No folder: nothing
+is written, nothing is made. A turn with no edited files writes nothing. The log
+never changes the hook's result.
+
 Measured on the big app: 3 edits checked one by one, 14.8 seconds. The same 3
 edits in batch mode: 0.2 seconds for the edits, then one check of 5.6 seconds.
 The more edits in a turn, the bigger the saving.
@@ -342,6 +350,8 @@ types file in about half a second, and the hook uses that file.
 - No LSP running: the hook loads FOAM itself, as before.
 - `"lspWait"` in the config: how long the hook waits for the LSP, in milliseconds (default 4000).
 - `node test/baseline-files.js <foam3 folder>` tests `--baseline-files` on a small app in a temp folder.
+- `node test/harness-log.js <foam3 folder>` tests the Stop hook's harness log, in a temp git repo.
+- `node test/types.js <foam3 folder>` tests `dao.on...`, `slot.get()` and the test-file `click()` rule (needs TypeScript).
 - The plugin keeps its own copy of the checks for when no LSP runs. `node test/parity.js <app> <FOAM-LSP folder>` runs both on one app and lists every problem only one of them reports. Run it after changing a check in either repo.
 
 ## Cleaning up old code: the migrator agent
@@ -443,6 +453,10 @@ is not checked.
 - `create({ name$: slot })`. FOAM binds the property to the slot.
 - A plain script with no FOAM model in it, such as a Node runner.
 - Fields added to a plain JavaScript object (`var o = {}; o.x = 1`).
+- In a test file (in a `test/` folder, or named `...Test.js`): `click()` on a plain
+  `Element`, such as `document.querySelector('[data-x]').click()`. Only an HTML element
+  has `click()`, but a test runs that line, so a wrong element fails the test itself.
+  Anywhere else it is reported, with a cast as the fix.
 
 ## Not checked
 

@@ -92,13 +92,19 @@ const CLEANUP = [
   [/^TS2538$/, /./, 'Use a string or a number as the key.'],
   [/^TS2810$/, /./, 'Write: /** @type {Promise<void>} */ (new Promise(...)), or call resolve with a value.']
 ];
+// A test file: in a test/ folder, or named ...Test.js.
+const TEST_FILE = /(^|\/)test\/|Test\.js$/;
 // TypeScript errors that are limits of TypeScript, not problems in the code. Never reported.
+// [error code, message, files (optional: only in these)]
 const NOT_REPORTED = [
   [/^TS(2580|2591)$/, /./],                                   // a Node name (require, assert) in a file with no Node types
   [/^TS2704$/, /./],                                          // delete of a property TypeScript thinks is read-only
-  [/^TS2367$/, /types '(["'`]).*\1' and '(["'`]).*\2' have no overlap/]   // two literals: narrowing that ignores a change made by a call
+  [/^TS2367$/, /types '(["'`]).*\1' and '(["'`]).*\2' have no overlap/],  // two literals: narrowing that ignores a change made by a call
+  // A test clicks what a DOM query found: querySelector gives a plain Element, and only an
+  // HTML element has click(). A test runs that line, so a wrong element fails the test itself.
+  [/^TS2339$/, /^Property 'click' does not exist on type 'Element'\.$/, TEST_FILE]
 ];
-const notReported = (code, msg) => NOT_REPORTED.some(([c, m]) => c.test(code) && m.test(msg));
+const notReported = (code, msg, file = '') => NOT_REPORTED.some(([c, m, f]) => c.test(code) && m.test(msg) && ( ! f || f.test(file) ));
 const cleanupFix = (code, msg) => { const c = CLEANUP.find(c => c[0].test(code) && c[1].test(msg)); return c ? c[2] : undefined; };
 
 module.exports = { RULES, STYLE, TS, cleanupFix, notReported };
