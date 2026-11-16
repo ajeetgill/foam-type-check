@@ -331,6 +331,7 @@ types file in about half a second, and the hook uses that file.
 - Nothing to set up in the plugin. The LSP finds `foam-check.config.json` at the workspace root.
 - No LSP running: the hook loads FOAM itself, as before.
 - `"lspWait"` in the config: how long the hook waits for the LSP, in milliseconds (default 4000).
+- The plugin keeps its own copy of the checks for when no LSP runs. `node test/parity.js <app> <FOAM-LSP folder>` runs both on one app and lists every problem only one of them reports. Run it after changing a check in either repo.
 
 ## Undeclared fields
 

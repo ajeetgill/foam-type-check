@@ -116,14 +116,14 @@ function checkJournals({ foam, app, files }) {
         continue;
       }
       if ( t[0] === 'r' ) continue;        // a remove names an id only
-      rows.push({ lineNo, row });
+      rows.push({ lineNo, row, text: t });
     }
 
     // A row with no class gets the class of the store it is replayed into (the DAO's
     // "of"). The file does not say which; when every other row names one class, use it.
     const named = new Set(rows.map(r => r.row.class).filter(c => typeof c === 'string'));
     const fileClass = named.size === 1 ? [...named][0] : null;
-    for ( const { lineNo, row } of rows ) {
+    for ( const { lineNo, row, text } of rows ) {
       const cid = typeof row.class === 'string' ? row.class : fileClass;
       if ( ! cid ) continue;
       let cls; try { cls = foam.lookup(cid, true); } catch (e) {}
@@ -132,14 +132,28 @@ function checkJournals({ foam, app, files }) {
         if ( ! declared.has(cid) ) add(file, lineNo, 'unknown class', cid);
         continue;
       }
-      const props = cls.getAxiomsByClass(foam.lang.Property);
-      for ( const k of Object.keys(row) ) {
-        if ( k === 'class' ) continue;
-        const ax = cls.getAxiomByName(k);
-        if ( ax && foam.lang.Property.isInstance(ax) ) continue;
-        if ( props.some(p => (p.aliases || []).includes(k)) ) continue;
-        add(file, lineNo, 'unknown key', `${cid}.${k}`);
-      }
+      // Keys, also of nested objects that name their own class (FOAM drops those too).
+      // Each at the first line of the row that writes it, as the FOAM LSP places it.
+      const keyLine = k => {
+        const re = new RegExp('(?:"' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"|' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')\\s*:');
+        const i = text.split('\n').findIndex(l => re.test(l));
+        return lineNo + Math.max(i, 0);
+      };
+      const checkKeys = (obj, c, id) => {
+        const props = c.getAxiomsByClass(foam.lang.Property);
+        for ( const k of Object.keys(obj) ) {
+          if ( k === 'class' ) continue;
+          const ax = c.getAxiomByName(k);
+          const known = ( ax && foam.lang.Property.isInstance(ax) ) || props.some(p => p.shortName === k || (p.aliases || []).includes(k));
+          if ( ! known ) add(file, keyLine(k), 'unknown key', `${id}.${k}`);
+          for ( const v of Array.isArray(obj[k]) ? obj[k] : [obj[k]] ) {
+            if ( ! v || typeof v !== 'object' || Array.isArray(v) || typeof v.class !== 'string' ) continue;
+            let inner; try { inner = foam.lookup(v.class, true); } catch (e) { /* not a class: not checked */ }
+            if ( inner ) checkKeys(v, inner, v.class);
+          }
+        }
+      };
+      checkKeys(row, cls, cid);
       if ( ! ('id' in row) ) {
         // Ask FOAM: a class may compute its id from other properties.
         let id;

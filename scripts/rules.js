@@ -17,7 +17,8 @@ const STYLE = [
     id: 'property has no class', axiom: 'foam.lang.Property', member: 'property',
     group: 'properties with no class', one: 'property with no class',
     fix: "Add a class, for example class: 'String'.",
-    bad: p => p.cls_.id === 'foam.lang.Property'
+    // Only properties the class's own model declares (not ones a mixin or FOAM adds).
+    bad: (p, ctx) => p.cls_.id === 'foam.lang.Property' && ctx.declares('properties', p.name)
   },
   {
     id: 'argument has no type', axiom: 'foam.lang.Method', member: 'method',
@@ -31,13 +32,13 @@ const STYLE = [
     id: 'import has no type', axiom: 'foam.lang.Import', member: 'import',
     group: 'imports with no type', one: 'import with no type',
     fix: "Use the object form: { name: 'x', key: 'x', type: 'Type' }.",
-    bad: im => typeof im.type !== 'string' && typeof im.of !== 'string'
+    bad: (im, ctx) => typeof im.type !== 'string' && typeof im.of !== 'string' && ctx.declares('imports', im.name)
   },
   {
     id: 'DAO import does not say what it holds', axiom: 'foam.lang.Import', member: 'import',
     group: 'DAO imports with no "of"', one: 'DAO import with no "of"',
     fix: "Add of: '<class id>' to the import.",
-    bad: im => im.type === 'foam.dao.DAO' && typeof im.of !== 'string'
+    bad: (im, ctx) => im.type === 'foam.dao.DAO' && typeof im.of !== 'string' && ctx.declares('imports', im.name)
   },
   {
     // Found in the type check (check.js): an unknown name that the same file assigns.

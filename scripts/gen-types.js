@@ -556,11 +556,15 @@ function generate_(opts, log) {
       if ( ! files.has(f) ) { let t = ''; try { t = fs.readFileSync(f, 'utf8'); } catch (e) {} files.set(f, t); }
       return files.get(f);
     };
+    // Whether the class's own model (what its file says) declares this member: a mixin's
+    // or FOAM's members are the class's axioms too. 'key as name' and objects both count.
+    const declares = (cls, list, name) => ((cls.model_ && cls.model_[list]) || []).some(x =>
+      typeof x === 'string' ? x.split(/\s+as\s+/).pop().replace(/\?$/, '') === name : Array.isArray(x) ? x[0] === name : x && x.name === name);
     // The style rules (rules.js): each walks one kind of axiom of each class in the package.
     const { STYLE } = require('./rules');
     for ( const id of known.filter(i => i.startsWith(PKG)) ) {
       const cls = foam.lookup(id), file = (cls.model_ && cls.model_.source) || '';
-      const ctx = { ownSource: () => ownSource(cls) };
+      const ctx = { ownSource: () => ownSource(cls), declares: (list, name) => declares(cls, list, name) };
       for ( const rule of STYLE ) {
         const axiomCls = rule.axiom && foam.lookup(rule.axiom, true);
         if ( ! axiomCls ) continue;
