@@ -76,7 +76,7 @@ Never:
 
 Valid code the checker cannot follow is a gap, not a bug. If the only fix makes the code harder to read, leave the
 code and list it. If you keep a fix that only works around the checker, list it too.
-Known gaps (plugin 0.7.8; `dao.on.put.sub(...)` on a `foam.dao.DAO` import and `slot.get()` on a
+Known gaps (plugin 0.7.9; `dao.on.put.sub(...)` on a `foam.dao.DAO` import and `slot.get()` on a
 `foam.lang.Slot` are no longer gaps: do not retype imports as `foam.dao.AbstractDAO` for them): a test class the app does not load is in the types as `any`: naming it works, but its
 members and arguments are not checked; mixed-shape array literals get a too-narrow type; two `var`s of
 one name in one function are reported (rename one: the project wants one type per variable); a journal key of a

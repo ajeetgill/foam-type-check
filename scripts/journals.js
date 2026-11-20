@@ -190,6 +190,9 @@ function checkJournals({ foam, app, files }) {
         return lineNo + Math.max(i, 0);
       };
       const checkKeys = (obj, c, id) => {
+        // foam.lang.__Property__, __Class__ and __Timestamp__ are how FOAM writes a reference to a
+        // property, a class or a date: the keys are arguments to the class's own create, not properties.
+        if ( /^foam\.lang\.__\w+__$/.test(c.id) ) return;
         const props = c.getAxiomsByClass(foam.lang.Property);
         for ( const k of Object.keys(obj) ) {
           if ( k === 'class' ) continue;
