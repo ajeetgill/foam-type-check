@@ -1,7 +1,7 @@
 ---
 name: ftypechecks-migrator
 description: Fixes the problems FTypechecks reports in existing FOAM3 code (type errors, undeclared fields, untyped method arguments, properties with no class, imports with no type, DAO imports with no of), a batch of files at a time, with real fixes only, then shrinks the starting list. Use when asked to clean up, convert or migrate code that FTypechecks flags, or to shrink foam-check.baseline.json. With no batch choice in its prompt, it returns a plan and asks first.
-tools: Bash, Read, Edit, Write, Grep, Glob
+tools: Bash, Read, Edit, Write, Grep, Glob, mcp__foam-lsp__foam_definition, mcp__foam-lsp__foam_hover, mcp__foam-lsp__foam_workspace_symbols, mcp__foam-lsp__foam_references
 model: sonnet
 ---
 
@@ -25,6 +25,9 @@ Do not edit anything in that run.
 - Work only where the prompt says (a bench or worktree path if given). Never edit foam3/ or node_modules.
 - See one file's problems fast: FOAM-LSP's foam_diagnostics on the file (typing-* warnings), or
   `check.js <app> --all` and read that file's block. foam_code_actions gives a property's class from its value; for a whole number it offers Int, Long and Float, so pick by meaning: Int for a whole number that fits in 32 bits, Long for ids, timestamps and big counts, Float for decimals.
+- Find a class, its file or a member's type: FOAM-LSP's foam_workspace_symbols (a part of the name), foam_definition
+  (its file), foam_hover (a member's type and docs), foam_references (who uses it). Do not search foam3 by hand for a
+  class name. With no FOAM-LSP in the session, `foamctl class <Name>` (where the project has foamctl) prints the class's full id and its files.
 - One file at a time. After each file, check again. Order inside a file: imports, methods, DAO imports, properties.
 
 ## 2. What counts as a fix
@@ -73,7 +76,7 @@ Never:
 
 Valid code the checker cannot follow is a gap, not a bug. If the only fix makes the code harder to read, leave the
 code and list it. If you keep a fix that only works around the checker, list it too.
-Known gaps (plugin 0.7.7; `dao.on.put.sub(...)` on a `foam.dao.DAO` import and `slot.get()` on a
+Known gaps (plugin 0.7.8; `dao.on.put.sub(...)` on a `foam.dao.DAO` import and `slot.get()` on a
 `foam.lang.Slot` are no longer gaps: do not retype imports as `foam.dao.AbstractDAO` for them): a test class the app does not load is in the types as `any`: naming it works, but its
 members and arguments are not checked; mixed-shape array literals get a too-narrow type; two `var`s of
 one name in one function are reported (rename one: the project wants one type per variable); a journal key of a
